@@ -40,6 +40,19 @@ export class AdmissionsController {
     return this.admissionsService.submitApplication(schoolId, body);
   }
 
+  @Get('applications/:id')
+  async getApplicationById(@Param('id') id: string) {
+    return this.admissionsService.getApplicationById(id);
+  }
+
+  @Post('applications/:id/documents')
+  async uploadDocument(
+    @Param('id') id: string,
+    @Body() body: { title: string; docType: string; fileUrl: string },
+  ) {
+    return this.admissionsService.uploadApplicationDocument(id, body);
+  }
+
   @Post('applications/:id/interview')
   async recordInterview(@Param('id') id: string, @Body() body: any) {
     return this.admissionsService.recordInterview(id, body);

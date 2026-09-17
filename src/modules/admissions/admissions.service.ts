@@ -46,21 +46,93 @@ export class AdmissionsService {
     });
   }
 
+  async getApplicationById(id: string) {
+    const app = await this.prisma.admissionApplication.findUnique({ where: { id } });
+    if (!app) throw new NotFoundException('Application not found');
+    return app;
+  }
+
   async submitApplication(schoolId: string, data: any) {
-    const applicationNo = `APP-${Date.now().toString().slice(-6)}`;
+    const applicationNo = `APP-${new Date().getFullYear()}-${Date.now().toString().slice(-5)}`;
+    
+    // Normalize strings for JSON fields if passed as objects
+    const tenthMarksData = typeof data.tenthMarksData === 'object' 
+      ? JSON.stringify(data.tenthMarksData) 
+      : data.tenthMarksData || null;
+
+    const eleventhMarksData = typeof data.eleventhMarksData === 'object'
+      ? JSON.stringify(data.eleventhMarksData)
+      : data.eleventhMarksData || null;
+
+    const documentsData = typeof data.documentsData === 'object'
+      ? JSON.stringify(data.documentsData)
+      : data.documentsData || null;
+
+    const parentName = data.parentName || data.fatherName || data.motherName || 'Parent / Guardian';
+    const parentPhone = data.parentPhone || data.fatherPhone || data.motherPhone || '';
+
     return this.prisma.admissionApplication.create({
       data: {
         schoolId,
         applicationNo,
         studentName: data.studentName,
-        dob: new Date(data.dob),
-        gender: data.gender,
-        parentName: data.parentName,
-        parentPhone: data.parentPhone,
-        parentEmail: data.parentEmail,
-        address: data.address,
+        dob: new Date(data.dob || Date.now()),
+        age: data.age ? parseInt(data.age.toString(), 10) : undefined,
+        gender: data.gender || 'Not Specified',
+        studentPhotoUrl: data.studentPhotoUrl || null,
+        aadharNumber: data.aadharNumber || null,
+        bloodGroup: data.bloodGroup || null,
+        previousSchool: data.previousSchool || null,
+        previousBoard: data.previousBoard || null,
+        fatherName: data.fatherName || null,
+        fatherPhone: data.fatherPhone || null,
+        fatherPhotoUrl: data.fatherPhotoUrl || null,
+        motherName: data.motherName || null,
+        motherPhone: data.motherPhone || null,
+        motherPhotoUrl: data.motherPhotoUrl || null,
+        parentName,
+        parentPhone,
+        parentEmail: data.parentEmail || 'admissions@school.edu',
+        emergencyPhone: data.emergencyPhone || null,
+        address: data.address || '',
         targetGrade: data.targetGrade,
+        streamGroup: data.streamGroup || null,
+        tenthMarksData,
+        eleventhMarksData,
+        documentsData,
         status: ApplicationStatus.SUBMITTED,
+      },
+    });
+  }
+
+  async uploadApplicationDocument(id: string, docData: { title: string; docType: string; fileUrl: string }) {
+    const app = await this.prisma.admissionApplication.findUnique({ where: { id } });
+    if (!app) throw new NotFoundException('Application not found');
+
+    let currentDocs: any[] = [];
+    try {
+      if (app.documentsData) {
+        currentDocs = JSON.parse(app.documentsData);
+      }
+    } catch {
+      currentDocs = [];
+    }
+
+    const newDoc = {
+      id: `doc-${Date.now()}`,
+      title: docData.title,
+      docType: docData.docType,
+      fileUrl: docData.fileUrl,
+      uploadedAt: new Date().toISOString(),
+      verificationStatus: 'VERIFIED',
+    };
+
+    const updatedDocs = [...currentDocs.filter((d) => d.docType !== docData.docType), newDoc];
+
+    return this.prisma.admissionApplication.update({
+      where: { id },
+      data: {
+        documentsData: JSON.stringify(updatedDocs),
       },
     });
   }
@@ -91,17 +163,23 @@ export class AdmissionsService {
     if (!app) throw new NotFoundException('Application not found');
 
     if (decision === 'APPROVED' && enrollmentData) {
-      // Complete enrollment: Create student, parent link, and active status
+      // Complete enrollment: Create student, parent link, documents, and active status
       return this.prisma.$transaction(async (tx) => {
         const updatedApp = await tx.admissionApplication.update({
           where: { id },
           data: { status: ApplicationStatus.ENROLLED },
         });
 
-        // Create Parent
+        // Create or Link Parent
         const parent = await tx.parentGuardian.create({
           data: {
             schoolId: app.schoolId,
+            fatherName: app.fatherName,
+            fatherPhone: app.fatherPhone,
+            fatherPhotoUrl: app.fatherPhotoUrl,
+            motherName: app.motherName,
+            motherPhone: app.motherPhone,
+            motherPhotoUrl: app.motherPhotoUrl,
             guardianName: app.parentName,
             phone: app.parentPhone,
             email: app.parentEmail,
@@ -121,6 +199,16 @@ export class AdmissionsService {
             lastName: app.studentName.split(' ').slice(1).join(' ') || '',
             dob: app.dob,
             gender: app.gender,
+            bloodGroup: app.bloodGroup,
+            photoUrl: app.studentPhotoUrl,
+            studentPhotoUrl: app.studentPhotoUrl,
+            aadharNumber: app.aadharNumber,
+            fatherPhotoUrl: app.fatherPhotoUrl,
+            motherPhotoUrl: app.motherPhotoUrl,
+            previousSchool: app.previousSchool,
+            streamGroup: app.streamGroup,
+            tenthMarksData: app.tenthMarksData,
+            eleventhMarksData: app.eleventhMarksData,
             classId: enrollmentData.classId,
             sectionId: enrollmentData.sectionId,
             academicYearId: enrollmentData.academicYearId,
@@ -129,6 +217,29 @@ export class AdmissionsService {
             address: app.address,
           },
         });
+
+        // Migrate uploaded documents into StudentDocument records
+        if (app.documentsData) {
+          try {
+            const docs: any[] = JSON.parse(app.documentsData);
+            if (Array.isArray(docs)) {
+              for (const doc of docs) {
+                await tx.studentDocument.create({
+                  data: {
+                    schoolId: app.schoolId,
+                    studentId: student.id,
+                    title: doc.title || doc.docType,
+                    docType: doc.docType,
+                    fileUrl: doc.fileUrl,
+                    verificationStatus: doc.verificationStatus || 'VERIFIED',
+                  },
+                });
+              }
+            }
+          } catch {
+            // Ignore parse errors if documents format is non-array
+          }
+        }
 
         return { application: updatedApp, student };
       });

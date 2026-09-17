@@ -332,12 +332,29 @@ model AdmissionApplication {
   applicationNo   String            @unique
   studentName     String
   dob             DateTime
+  age             Int?
   gender          String
+  studentPhotoUrl String?
+  aadharNumber    String?
+  bloodGroup      String?
+  previousSchool  String?
+  previousBoard   String?
+  fatherName      String?
+  fatherPhone     String?
+  fatherPhotoUrl  String?
+  motherName      String?
+  motherPhone     String?
+  motherPhotoUrl  String?
   parentName      String
   parentPhone     String
   parentEmail     String
+  emergencyPhone  String?
   address         String
   targetGrade     String
+  streamGroup     String?           // e.g. Bio-Maths, CS-Maths, Pure Science, Commerce-CA, Commerce-BM, Arts
+  tenthMarksData  String?           // JSON string of Tamil Nadu 10th SSLC marksheet
+  eleventhMarksData String?         // JSON string of 11th marksheet if Grade 12 admission
+  documentsData   String?           // JSON string of uploaded docs (TC, Marksheet, Aadhar, etc.)
   status          ApplicationStatus @default(SUBMITTED)
   interviewDate   DateTime?
   interviewScore  Float?
@@ -351,12 +368,17 @@ model ParentGuardian {
   userId          String?        @unique
   user            User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
   fatherName      String?
+  fatherPhone     String?
+  fatherPhotoUrl  String?
   motherName      String?
+  motherPhone     String?
+  motherPhotoUrl  String?
   guardianName    String?
   phone           String
   email           String?
   occupation      String?
   address         String?
+  aadharNumber    String?
   students        Student[]
 }
 
@@ -374,6 +396,14 @@ model Student {
   gender          String
   bloodGroup      String?
   photoUrl        String?
+  studentPhotoUrl String?
+  aadharNumber    String?
+  fatherPhotoUrl  String?
+  motherPhotoUrl  String?
+  previousSchool  String?
+  streamGroup     String?
+  tenthMarksData  String?
+  eleventhMarksData String?
   classId         String
   gradeClass      GradeClass     @relation(fields: [classId], references: [id], onDelete: Restrict)
   sectionId       String
