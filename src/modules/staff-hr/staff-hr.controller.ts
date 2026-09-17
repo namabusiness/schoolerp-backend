@@ -1,0 +1,67 @@
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { StaffHrService } from './staff-hr.service';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { Tenant } from '../../common/decorators/tenant.decorator';
+import { LeaveStatus } from '@prisma/client';
+
+@Controller('hr')
+@UseGuards(JwtAuthGuard)
+export class StaffHrController {
+  constructor(private hrService: StaffHrService) {}
+
+  @Get('departments')
+  async getDepartments(@Tenant() schoolId: string) {
+    return this.hrService.getDepartments(schoolId);
+  }
+
+  @Post('departments')
+  async createDepartment(@Tenant() schoolId: string, @Body('name') name: string) {
+    return this.hrService.createDepartment(schoolId, name);
+  }
+
+  @Get('staff')
+  async getStaff(@Tenant() schoolId: string, @Query('departmentId') departmentId?: string) {
+    return this.hrService.getStaff(schoolId, departmentId);
+  }
+
+  @Post('staff')
+  async addStaff(@Tenant() schoolId: string, @Body() body: any) {
+    return this.hrService.addStaff(schoolId, body);
+  }
+
+  @Get('leaves')
+  async getLeaves(@Tenant() schoolId: string, @Query('status') status?: LeaveStatus) {
+    return this.hrService.getLeaves(schoolId, status);
+  }
+
+  @Post('leaves')
+  async applyLeave(@Tenant() schoolId: string, @Body() body: any) {
+    return this.hrService.applyLeave(schoolId, body);
+  }
+
+  @Patch('leaves/:id/status')
+  async updateLeaveStatus(
+    @Tenant() schoolId: string,
+    @Param('id') id: string,
+    @Body('status') status: LeaveStatus,
+  ) {
+    return this.hrService.updateLeaveStatus(schoolId, id, status);
+  }
+
+  @Get('payrolls')
+  async getPayrolls(
+    @Tenant() schoolId: string,
+    @Query('month') month: number,
+    @Query('year') year: number,
+  ) {
+    return this.hrService.getPayrolls(schoolId, month || new Date().getMonth() + 1, year || new Date().getFullYear());
+  }
+
+  @Post('payrolls/run')
+  async runPayroll(
+    @Tenant() schoolId: string,
+    @Body() body: { month: number; year: number },
+  ) {
+    return this.hrService.runPayroll(schoolId, body.month, body.year);
+  }
+}
