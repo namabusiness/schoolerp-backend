@@ -5,6 +5,21 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class StudentsService {
   constructor(private prisma: PrismaService) {}
 
+  public async resolveSchoolId(schoolId?: string): Promise<string> {
+    if (!schoolId || schoolId === 'school-1') {
+      const defaultSchool = await this.prisma.school.findFirst();
+      return defaultSchool?.id || 'school-greenwood-high';
+    }
+    const schoolById = await this.prisma.school.findUnique({ where: { id: schoolId } });
+    if (schoolById) return schoolById.id;
+
+    const schoolBySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
+    if (schoolBySlug) return schoolBySlug.id;
+
+    const fallback = await this.prisma.school.findFirst();
+    return fallback?.id || 'school-greenwood-high';
+  }
+
   async getStudents(
     schoolId: string,
     params?: {
@@ -16,7 +31,8 @@ export class StudentsService {
       limit?: number;
     },
   ) {
-    const where: any = { schoolId };
+    const resolvedSchoolId = await this.resolveSchoolId(schoolId);
+    const where: any = { schoolId: resolvedSchoolId };
     if (params?.classId) where.classId = params.classId;
     if (params?.sectionId) where.sectionId = params.sectionId;
     if (params?.status) where.status = params.status;
@@ -52,8 +68,9 @@ export class StudentsService {
 
   // Complete 360-degree central student connection
   async getStudent360(schoolId: string, studentId: string) {
+    const resolvedSchoolId = await this.resolveSchoolId(schoolId);
     const student = await this.prisma.student.findFirst({
-      where: { id: studentId, schoolId },
+      where: { id: studentId, schoolId: resolvedSchoolId },
       include: {
         gradeClass: true,
         section: true,

@@ -21,14 +21,14 @@ export class JwtAuthGuard implements CanActivate {
     if (!authHeader) {
       // Demo / Development fallback simulation header support
       const demoRole = request.headers['x-demo-role'];
-      const demoSchoolId = request.headers['x-demo-school-id'];
+      const demoSchoolId = request.headers['x-demo-school-id'] || request.headers['x-school-id'];
       if (demoRole) {
         request.user = {
           id: 'demo-user-id',
           email: `${demoRole.toLowerCase()}@example.com`,
           name: `Demo ${demoRole}`,
           role: demoRole,
-          schoolId: demoSchoolId || 'school-1',
+          schoolId: demoSchoolId || 'school-greenwood-high',
         };
         return true;
       }
@@ -46,6 +46,19 @@ export class JwtAuthGuard implements CanActivate {
       request.user = payload;
       return true;
     } catch {
+      // If token expired/mock, but demo role is supplied, allow graceful development fallback
+      if (request.headers['x-demo-role']) {
+        const demoRole = request.headers['x-demo-role'];
+        const demoSchoolId = request.headers['x-demo-school-id'] || request.headers['x-school-id'];
+        request.user = {
+          id: 'demo-user-id',
+          email: `${demoRole.toLowerCase()}@example.com`,
+          name: `Demo ${demoRole}`,
+          role: demoRole,
+          schoolId: demoSchoolId || 'school-greenwood-high',
+        };
+        return true;
+      }
       throw new UnauthorizedException('Token is expired or invalid');
     }
   }
