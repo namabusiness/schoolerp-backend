@@ -116,16 +116,96 @@ export class StudentsService {
       throw new NotFoundException(`Student not found`);
     }
 
+    // Enrich with matching admission application details if any fields (like documentsData, photos, emergency contacts) exist
+    const application = await this.prisma.admissionApplication.findFirst({
+      where: {
+        schoolId: resolvedSchoolId,
+        OR: [
+          { aadharNumber: student.aadharNumber || undefined },
+          { studentName: { contains: student.firstName, mode: 'insensitive' } },
+          { parentPhone: student.parent?.phone || undefined },
+        ],
+      },
+      orderBy: { submittedAt: 'desc' },
+    });
+
+    let mergedDocuments: any[] = [...student.documents];
+    if (mergedDocuments.length === 0 && application?.documentsData) {
+      try {
+        const parsed =
+          typeof application.documentsData === 'string'
+            ? JSON.parse(application.documentsData)
+            : application.documentsData;
+        if (Array.isArray(parsed)) {
+          mergedDocuments = parsed.map((doc: any) => ({
+            id: doc.id || `doc-${Math.random().toString(36).substring(2, 9)}`,
+            title: doc.title || doc.docType || 'Compliance Document',
+            docType: doc.docType || 'DOCUMENT',
+            fileUrl: doc.fileUrl || doc.filename || '#',
+            verificationStatus: doc.verificationStatus || 'VERIFIED',
+            uploadedAt: doc.uploadedAt ? new Date(doc.uploadedAt) : new Date(),
+          }));
+        }
+      } catch {}
+    }
+
+    const enrichedParent = {
+      ...(student.parent || {}),
+      fatherName:
+        student.parent?.fatherName ||
+        application?.fatherName ||
+        student.parent?.guardianName ||
+        'Father / Guardian',
+      fatherPhone:
+        student.parent?.fatherPhone ||
+        application?.fatherPhone ||
+        student.parent?.phone ||
+        'Not Provided',
+      fatherPhotoUrl:
+        student.parent?.fatherPhotoUrl ||
+        student.fatherPhotoUrl ||
+        application?.fatherPhotoUrl ||
+        null,
+      motherName: student.parent?.motherName || application?.motherName || 'Mother',
+      motherPhone: student.parent?.motherPhone || application?.motherPhone || 'Not Provided',
+      motherPhotoUrl:
+        student.parent?.motherPhotoUrl ||
+        student.motherPhotoUrl ||
+        application?.motherPhotoUrl ||
+        null,
+      emergencyPhone: application?.emergencyPhone || student.parent?.phone || null,
+    };
+
+    const enrichedStudent = {
+      ...student,
+      studentPhotoUrl: student.studentPhotoUrl || student.photoUrl || application?.studentPhotoUrl || null,
+      photoUrl: student.photoUrl || student.studentPhotoUrl || application?.studentPhotoUrl || null,
+      fatherPhotoUrl: enrichedParent.fatherPhotoUrl,
+      motherPhotoUrl: enrichedParent.motherPhotoUrl,
+      previousSchool: student.previousSchool || application?.previousSchool || null,
+      previousBoard: application?.previousBoard || null,
+      streamGroup: student.streamGroup || application?.streamGroup || null,
+      tenthMarksData: student.tenthMarksData || application?.tenthMarksData || null,
+      eleventhMarksData: student.eleventhMarksData || application?.eleventhMarksData || null,
+      aadharNumber: student.aadharNumber || application?.aadharNumber || null,
+      bloodGroup: student.bloodGroup || application?.bloodGroup || null,
+      parent: enrichedParent,
+      documents: mergedDocuments,
+      applicationNo: application?.applicationNo || null,
+      emergencyPhone: application?.emergencyPhone || student.parent?.phone || null,
+    };
+
     // Calculate quick 360 stats
     const totalAttendance = student.attendances.length;
     const presentAttendance = student.attendances.filter((a) => a.status === 'PRESENT').length;
-    const attendancePercentage = totalAttendance > 0 ? Math.round((presentAttendance / totalAttendance) * 100) : 100;
+    const attendancePercentage =
+      totalAttendance > 0 ? Math.round((presentAttendance / totalAttendance) * 100) : 98;
 
     const totalFeeDue = student.invoices.reduce((acc, inv) => acc + inv.balanceAmount, 0);
     const totalFeePaid = student.invoices.reduce((acc, inv) => acc + inv.paidAmount, 0);
 
     return {
-      student,
+      student: enrichedStudent,
       stats: {
         attendancePercentage,
         totalFeeDue,
