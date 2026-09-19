@@ -55,6 +55,7 @@ export class StudentsService {
           gradeClass: true,
           section: true,
           parent: true,
+          documents: true,
         },
         orderBy: [{ classId: 'asc' }, { rollNumber: 'asc' }],
         skip: (page - 1) * limit,
@@ -231,4 +232,99 @@ export class StudentsService {
       },
     });
   }
+
+  async uploadStudentDocument(
+    schoolId: string,
+    studentId: string,
+    body: {
+      title: string;
+      docType: string;
+      fileUrl: string;
+      verificationStatus?: string;
+      filename?: string;
+      fileSize?: string;
+    },
+  ) {
+    const resolvedSchoolId = await this.resolveSchoolId(schoolId);
+    const student = await this.prisma.student.findFirst({
+      where: { id: studentId, schoolId: resolvedSchoolId },
+      include: { parent: true },
+    });
+
+    if (!student) {
+      throw new NotFoundException('Student not found');
+    }
+
+    const existing = await this.prisma.studentDocument.findFirst({
+      where: { studentId: student.id, docType: body.docType },
+    });
+
+    let doc;
+    if (existing) {
+      doc = await this.prisma.studentDocument.update({
+        where: { id: existing.id },
+        data: {
+          title: body.title || existing.title,
+          fileUrl: body.fileUrl,
+          verificationStatus: body.verificationStatus || 'VERIFIED',
+        },
+      });
+    } else {
+      doc = await this.prisma.studentDocument.create({
+        data: {
+          schoolId: resolvedSchoolId,
+          studentId: student.id,
+          title: body.title || body.docType,
+          docType: body.docType,
+          fileUrl: body.fileUrl,
+          verificationStatus: body.verificationStatus || 'VERIFIED',
+        },
+      });
+    }
+
+    // Sync to matching AdmissionApplication if one exists
+    try {
+      const app = await this.prisma.admissionApplication.findFirst({
+        where: {
+          schoolId: resolvedSchoolId,
+          OR: [
+            { aadharNumber: student.aadharNumber || undefined },
+            { studentName: { contains: student.firstName, mode: 'insensitive' } },
+            { parentPhone: student.parent?.phone || undefined },
+          ],
+        },
+      });
+
+      if (app) {
+        let currentDocs: any[] = [];
+        try {
+          if (app.documentsData) {
+            currentDocs = JSON.parse(app.documentsData);
+          }
+        } catch {}
+
+        const newAppDoc = {
+          id: doc.id,
+          title: doc.title,
+          docType: doc.docType,
+          filename: body.filename || `${doc.title}.pdf`,
+          fileSize: body.fileSize || '1.5 MB',
+          fileUrl: doc.fileUrl,
+          uploadedAt: new Date().toISOString().split('T')[0],
+          verificationStatus: 'VERIFIED',
+        };
+
+        const updatedDocs = [...currentDocs.filter((d: any) => d.docType !== doc.docType), newAppDoc];
+        await this.prisma.admissionApplication.update({
+          where: { id: app.id },
+          data: { documentsData: JSON.stringify(updatedDocs) },
+        });
+      }
+    } catch (e) {
+      console.warn('Sync document to application error:', e);
+    }
+
+    return doc;
+  }
 }
+

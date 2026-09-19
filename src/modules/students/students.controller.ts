@@ -1,4 +1,4 @@
-import { Controller, Get, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { StudentsService } from './students.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Tenant } from '../../common/decorators/tenant.decorator';
@@ -16,6 +16,15 @@ export class StudentsController {
   @Get(':id/360')
   async getStudent360(@Tenant() schoolId: string, @Param('id') id: string) {
     return this.studentsService.getStudent360(schoolId, id);
+  }
+
+  @Post(':id/documents')
+  async uploadStudentDocument(
+    @Tenant() schoolId: string,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    return this.studentsService.uploadStudentDocument(schoolId, id, body);
   }
 
   @Patch(':id')
