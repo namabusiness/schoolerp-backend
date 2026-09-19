@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../../prisma/prisma.service';
 import { SchoolStatus, Role } from '@prisma/client';
 import * as crypto from 'crypto';
+import * as bcrypt from 'bcryptjs';
 
 @Injectable()
 export class SuperAdminService {
@@ -338,5 +339,88 @@ export class SuperAdminService {
         monthlyPrice: p.monthlyPrice,
       })),
     };
+  }
+
+  // -------------------------------------------------------------
+  // USER ACCESS SETUP FLOW (Super Admin Provisioning)
+  // -------------------------------------------------------------
+  async getUsers(role?: string, schoolId?: string) {
+    const where: any = {};
+    if (role) where.role = role as Role;
+    if (schoolId) where.schoolId = schoolId;
+
+    return this.prisma.user.findMany({
+      where,
+      include: {
+        school: { select: { id: true, name: true, slug: true, code: true } },
+        staffProfile: { select: { id: true, employeeCode: true, designation: true, phone: true } },
+        driverProfile: { select: { id: true, licenseNumber: true, phone: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async setupUserAccess(data: {
+    schoolId: string;
+    name: string;
+    email: string;
+    password?: string;
+    role: Role;
+    profileType?: 'STAFF' | 'DRIVER' | 'ADMIN';
+    profileId?: string;
+  }) {
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(data.password || 'Access@123', salt);
+
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email: data.email },
+    });
+
+    let user;
+    if (existingUser) {
+      user = await this.prisma.user.update({
+        where: { id: existingUser.id },
+        data: {
+          role: data.role,
+          schoolId: data.schoolId,
+          passwordHash,
+          name: data.name,
+          isActive: true,
+        },
+      });
+    } else {
+      user = await this.prisma.user.create({
+        data: {
+          email: data.email,
+          name: data.name,
+          role: data.role,
+          schoolId: data.schoolId,
+          passwordHash,
+          isActive: true,
+        },
+      });
+    }
+
+    // Link to profile if specified
+    if (data.profileType === 'STAFF' && data.profileId) {
+      await this.prisma.staffProfile.update({
+        where: { id: data.profileId },
+        data: { userId: user.id },
+      });
+    } else if (data.profileType === 'DRIVER' && data.profileId) {
+      await this.prisma.driver.update({
+        where: { id: data.profileId },
+        data: { userId: user.id },
+      });
+    }
+
+    return user;
+  }
+
+  async toggleUserStatus(userId: string, isActive: boolean) {
+    return this.prisma.user.update({
+      where: { id: userId },
+      data: { isActive },
+    });
   }
 }

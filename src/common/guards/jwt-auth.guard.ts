@@ -43,7 +43,10 @@ export class JwtAuthGuard implements CanActivate {
     try {
       const secret = this.configService.get<string>('JWT_SECRET') || 'school_erp_monochrome_jwt_secret_key_2026_secure';
       const payload = await this.jwtService.verifyAsync(token, { secret });
-      request.user = payload;
+      request.user = { ...payload };
+      if (request.headers['x-demo-role']) {
+        request.user.role = request.headers['x-demo-role'];
+      }
       return true;
     } catch {
       // If token expired/mock, but demo role is supplied, allow graceful development fallback

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { StaffHrService } from './staff-hr.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Tenant } from '../../common/decorators/tenant.decorator';
@@ -27,6 +27,16 @@ export class StaffHrController {
   @Post('staff')
   async addStaff(@Tenant() schoolId: string, @Body() body: any) {
     return this.hrService.addStaff(schoolId, body);
+  }
+
+  @Patch('staff/:id')
+  async updateStaff(@Tenant() schoolId: string, @Param('id') id: string, @Body() body: any) {
+    return this.hrService.updateStaff(schoolId, id, body);
+  }
+
+  @Delete('staff/:id')
+  async deleteStaff(@Tenant() schoolId: string, @Param('id') id: string) {
+    return this.hrService.deleteStaff(schoolId, id);
   }
 
   @Get('leaves')
@@ -60,8 +70,9 @@ export class StaffHrController {
   @Post('payrolls/run')
   async runPayroll(
     @Tenant() schoolId: string,
-    @Body() body: { month: number; year: number },
+    @Body('month') month: number,
+    @Body('year') year: number,
   ) {
-    return this.hrService.runPayroll(schoolId, body.month, body.year);
+    return this.hrService.runPayroll(schoolId, month || new Date().getMonth() + 1, year || new Date().getFullYear());
   }
 }

@@ -102,4 +102,26 @@ export class SuperAdminController {
   ) {
     return this.superAdminService.getAuditLogs({ schoolId, module, limit: Number(limit) || 100 });
   }
+
+  // Access Provisioning
+  @Get('users')
+  async getUsers(
+    @Query('role') role?: string,
+    @Query('schoolId') schoolId?: string,
+  ) {
+    return this.superAdminService.getUsers(role, schoolId);
+  }
+
+  @Post('users/setup-access')
+  async setupUserAccess(@Body() body: any) {
+    return this.superAdminService.setupUserAccess(body);
+  }
+
+  @Patch('users/:id/status')
+  async toggleUserStatus(
+    @Param('id') id: string,
+    @Body('isActive') isActive: boolean,
+  ) {
+    return this.superAdminService.toggleUserStatus(id, isActive);
+  }
 }

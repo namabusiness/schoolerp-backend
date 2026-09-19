@@ -24,6 +24,8 @@ enum Role {
   FINANCE_ADMIN
   HR_ADMIN
   TRANSPORT_ADMIN
+  TRANSPORT_MANAGER
+  DRIVER
   CUSTOM_ADMIN
   TEACHER
   STAFF
@@ -161,6 +163,7 @@ model User {
 
   adminProfile    SchoolAdmin?
   staffProfile    StaffProfile?
+  driverProfile   Driver?
   studentProfile  Student?
   parentProfile   ParentGuardian?
   auditLogs       AuditLog[]
@@ -634,12 +637,39 @@ model FeePayment {
 // TRANSPORT
 // -------------------------------------------------------------
 
+model Driver {
+  id              String         @id @default(uuid())
+  schoolId        String
+  userId          String?        @unique
+  user            User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  name            String
+  phone           String
+  licenseNumber   String
+  licenseExpiry   DateTime?
+  experienceYears Int?           @default(0)
+  status          String         @default("ACTIVE") // ACTIVE, ON_LEAVE, INACTIVE
+  photoUrl        String?
+  address         String?
+  emergencyContact String?
+  vehicles        Vehicle[]
+  routes          Route[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+}
+
 model Vehicle {
   id              String         @id @default(uuid())
   schoolId        String
   registrationNo  String         @unique
   model           String
   capacity        Int
+  vehicleType     String         @default("BUS") // BUS, VAN, MINIBUS
+  driverId        String?
+  driver          Driver?        @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  insuranceExpiry DateTime?
+  pollutionExpiry DateTime?
+  fitnessExpiry   DateTime?
+  fuelType        String?        @default("DIESEL") // DIESEL, PETROL, CNG, ELECTRIC
   status          String         @default("ACTIVE") // ACTIVE, MAINTENANCE
   routes          Route[]
 }
@@ -648,10 +678,17 @@ model Route {
   id              String         @id @default(uuid())
   schoolId        String
   name            String         // Route 101 - North Sector
+  code            String?        // RT-101
+  startLocation   String?
+  endLocation     String?
   vehicleId       String?
   vehicle         Vehicle?       @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  driverId        String?
+  driver          Driver?        @relation(fields: [driverId], references: [id], onDelete: SetNull)
   driverName      String?
   driverPhone     String?
+  inchargeStaffId String?
+  inchargeStaff   StaffProfile?  @relation(fields: [inchargeStaffId], references: [id], onDelete: SetNull)
   stops           RouteStop[]
   trips           TripLog[]
   studentAssignments StudentTransportAssignment[]
@@ -666,6 +703,8 @@ model RouteStop {
   pickupTime      String         // "07:15"
   dropTime        String         // "15:45"
   stopOrder       Int
+  landmark        String?
+  fare            Float?         @default(0)
   assignments     StudentTransportAssignment[]
 }
 
@@ -757,6 +796,19 @@ model StaffProfile {
   user            User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
   employeeCode    String         @unique
   name            String
+  gender          String?
+  dob             DateTime?
+  bloodGroup      String?
+  photoUrl        String?
+  aadharNumber    String?
+  role            String?
+  documents       String?
+  qualification   String?        // e.g. M.Sc, B.Ed, M.Phil, Ph.D
+  specialization  String?        // Primary subjects taught / specialization
+  experienceYears Int?           @default(0)
+  employmentType  String?        @default("FULL_TIME") // FULL_TIME, CONTRACT, PART_TIME
+  emergencyPhone  String?
+  address         String?
   designation     String
   departmentId    String?
   department      Department?    @relation(fields: [departmentId], references: [id], onDelete: SetNull)
@@ -767,6 +819,7 @@ model StaffProfile {
   status          String         @default("ACTIVE")
   leaves          LeaveApplication[]
   payrolls        PayrollRecord[]
+  inchargeRoutes  Route[]
 }
 
 model LeaveApplication {
