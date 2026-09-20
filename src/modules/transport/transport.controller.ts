@@ -14,11 +14,49 @@ import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { Tenant } from '../../common/decorators/tenant.decorator';
 import { Role } from '@prisma/client';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { DriverAuthGuard } from './guards/driver-auth.guard';
+import { StartTripDto } from './dto/start-trip.dto';
+import { LocationUpdateDto } from './dto/location-update.dto';
 
 @Controller('transport')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class TransportController {
   constructor(private transportService: TransportService) {}
+
+  @Get('driver/me')
+  @UseGuards(DriverAuthGuard)
+  async getDriverAssignment(@CurrentUser('id') userId: string) {
+    return this.transportService.getDriverAssignment(userId);
+  }
+
+  @Post('driver/trips/start')
+  @UseGuards(DriverAuthGuard)
+  async startDriverTrip(@CurrentUser('id') userId: string, @Body() body: StartTripDto) {
+    return this.transportService.startDriverTrip(userId, body);
+  }
+
+  @Get('driver/trips/current')
+  @UseGuards(DriverAuthGuard)
+  async getCurrentDriverTrip(@CurrentUser('id') userId: string) {
+    return this.transportService.getCurrentDriverTrip(userId);
+  }
+
+  @Post('driver/trips/:tripId/location')
+  @UseGuards(DriverAuthGuard)
+  async updateDriverTripLocation(
+    @CurrentUser('id') userId: string,
+    @Param('tripId') tripId: string,
+    @Body() body: LocationUpdateDto,
+  ) {
+    return this.transportService.updateDriverTripLocation(userId, tripId, body);
+  }
+
+  @Post('driver/trips/:tripId/end')
+  @UseGuards(DriverAuthGuard)
+  async endDriverTrip(@CurrentUser('id') userId: string, @Param('tripId') tripId: string) {
+    return this.transportService.endDriverTrip(userId, tripId);
+  }
 
   // Drivers
   @Get('drivers')

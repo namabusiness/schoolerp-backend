@@ -1,9 +1,175 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { LocationUpdateDto } from './dto/location-update.dto';
+import { StartTripDto } from './dto/start-trip.dto';
+import { TripStatus } from '@prisma/client';
 
 @Injectable()
 export class TransportService {
   constructor(private prisma: PrismaService) {}
+
+  private readonly tripInclude = {
+    driver: true,
+    vehicle: true,
+    route: {
+      include: { stops: { orderBy: { stopOrder: 'asc' as const } } },
+    },
+  } as const;
+
+  private async getDriverForUser(userId: string) {
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      include: { user: { select: { id: true, name: true, email: true, schoolId: true, isActive: true } } },
+    });
+    if (!driver || !driver.user || driver.user.schoolId !== driver.schoolId || !driver.user.isActive) {
+      throw new ForbiddenException('Driver assignment is inactive or unavailable');
+    }
+    return driver;
+  }
+
+  async getDriverAssignment(userId: string) {
+    const driver = await this.getDriverForUser(userId);
+    const [school, routes, vehicles] = await Promise.all([
+      this.prisma.school.findUnique({
+        where: { id: driver.schoolId },
+        select: { id: true, name: true, code: true, slug: true, logoUrl: true },
+      }),
+      this.prisma.route.findMany({
+        where: { schoolId: driver.schoolId, driverId: driver.id },
+        include: { vehicle: true, stops: { orderBy: { stopOrder: 'asc' } } },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.vehicle.findMany({
+        where: { schoolId: driver.schoolId, driverId: driver.id },
+        orderBy: { registrationNo: 'asc' },
+      }),
+    ]);
+
+    return {
+      driver: {
+        id: driver.id,
+        name: driver.name,
+        phone: driver.phone,
+        licenseNumber: driver.licenseNumber,
+        licenseExpiry: driver.licenseExpiry,
+        experienceYears: driver.experienceYears,
+        status: driver.status,
+        photoUrl: driver.photoUrl,
+      },
+      school,
+      vehicles,
+      routes,
+    };
+  }
+
+  async startDriverTrip(userId: string, data: StartTripDto) {
+    const driver = await this.getDriverForUser(userId);
+    return this.prisma.$transaction(async (tx) => {
+      const activeTrip = await tx.trip.findFirst({
+        where: { schoolId: driver.schoolId, driverId: driver.id, status: TripStatus.ACTIVE },
+        select: { id: true },
+      });
+      if (activeTrip) throw new ConflictException('Driver already has an active trip');
+
+      const route = await tx.route.findFirst({
+        where: { id: data.routeId, schoolId: driver.schoolId, driverId: driver.id },
+      });
+      if (!route) throw new ForbiddenException('Route is not assigned to this driver');
+
+      const vehicleId = data.vehicleId || route.vehicleId;
+      if (!vehicleId) throw new ConflictException('Route has no assigned vehicle');
+      const vehicle = await tx.vehicle.findFirst({
+        where: { id: vehicleId, schoolId: driver.schoolId, driverId: driver.id },
+      });
+      if (!vehicle) throw new ForbiddenException('Vehicle is not assigned to this driver');
+      if (route.vehicleId && route.vehicleId !== vehicle.id) {
+        throw new ConflictException('Vehicle does not match the route assignment');
+      }
+
+      const activeVehicleTrip = await tx.trip.findFirst({
+        where: { schoolId: driver.schoolId, vehicleId: vehicle.id, status: TripStatus.ACTIVE },
+        select: { id: true },
+      });
+      if (activeVehicleTrip) throw new ConflictException('Vehicle already has an active trip');
+
+      return tx.trip.create({
+        data: {
+          schoolId: driver.schoolId,
+          driverId: driver.id,
+          vehicleId: vehicle.id,
+          routeId: route.id,
+          tripType: data.tripType,
+        },
+        include: this.tripInclude,
+      });
+    });
+  }
+
+  async getCurrentDriverTrip(userId: string) {
+    const driver = await this.getDriverForUser(userId);
+    const trip = await this.prisma.trip.findFirst({
+      where: { schoolId: driver.schoolId, driverId: driver.id, status: TripStatus.ACTIVE },
+      include: this.tripInclude,
+    });
+    if (!trip) throw new NotFoundException('No active trip found');
+    return trip;
+  }
+
+  async updateDriverTripLocation(userId: string, tripId: string, data: LocationUpdateDto) {
+    const driver = await this.getDriverForUser(userId);
+    const trip = await this.prisma.trip.findUnique({ where: { id: tripId } });
+    if (!trip || trip.schoolId !== driver.schoolId || trip.driverId !== driver.id) {
+      throw new ForbiddenException('Trip is not assigned to this driver');
+    }
+    if (trip.status !== TripStatus.ACTIVE) throw new ConflictException('Trip is not active');
+
+    return this.prisma.$transaction(async (tx) => {
+      await tx.tripLocation.create({
+        data: {
+          tripId: trip.id,
+          schoolId: driver.schoolId,
+          latitude: data.latitude,
+          longitude: data.longitude,
+          accuracy: data.accuracy,
+          speed: data.speed,
+          heading: data.heading,
+          recordedAt: data.timestamp,
+        },
+      });
+      return tx.trip.update({
+        where: { id: trip.id },
+        data: {
+          latestLatitude: data.latitude,
+          latestLongitude: data.longitude,
+          latestAccuracy: data.accuracy,
+          latestSpeed: data.speed,
+          latestHeading: data.heading,
+          latestLocationAt: data.timestamp,
+        },
+        include: this.tripInclude,
+      });
+    });
+  }
+
+  async endDriverTrip(userId: string, tripId: string) {
+    const driver = await this.getDriverForUser(userId);
+    const trip = await this.prisma.trip.findUnique({ where: { id: tripId } });
+    if (!trip || trip.schoolId !== driver.schoolId || trip.driverId !== driver.id) {
+      throw new ForbiddenException('Trip is not assigned to this driver');
+    }
+    if (trip.status !== TripStatus.ACTIVE) throw new ConflictException('Trip is already completed');
+
+    return this.prisma.trip.update({
+      where: { id: trip.id },
+      data: { status: TripStatus.COMPLETED, endedAt: new Date() },
+      select: { id: true, status: true, startedAt: true, endedAt: true },
+    });
+  }
 
   private async resolveSchoolId(schoolId: string): Promise<string> {
     if (!schoolId) return 'school-greenwood-high';
