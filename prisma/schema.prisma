@@ -89,6 +89,16 @@ enum CertificateType {
   MERIT
 }
 
+enum TripStatus {
+  ACTIVE
+  COMPLETED
+}
+
+enum TripType {
+  MORNING_PICKUP
+  AFTERNOON_DROP
+}
+
 // -------------------------------------------------------------
 // PLATFORM & MULTI-TENANCY
 // -------------------------------------------------------------
@@ -111,6 +121,8 @@ model School {
   updatedAt       DateTime       @updatedAt
 
   users           User[]
+  trips           Trip[]
+  tripLocations   TripLocation[]
   schoolAdmins    SchoolAdmin[]
   academicYears   AcademicYear[]
   classes         GradeClass[]
@@ -653,6 +665,7 @@ model Driver {
   emergencyContact String?
   vehicles        Vehicle[]
   routes          Route[]
+  trips           Trip[]
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 }
@@ -672,6 +685,7 @@ model Vehicle {
   fuelType        String?        @default("DIESEL") // DIESEL, PETROL, CNG, ELECTRIC
   status          String         @default("ACTIVE") // ACTIVE, MAINTENANCE
   routes          Route[]
+  trips           Trip[]
 }
 
 model Route {
@@ -691,6 +705,7 @@ model Route {
   inchargeStaff   StaffProfile?  @relation(fields: [inchargeStaffId], references: [id], onDelete: SetNull)
   stops           RouteStop[]
   trips           TripLog[]
+  operationalTrips Trip[]
   studentAssignments StudentTransportAssignment[]
 }
 
@@ -728,6 +743,53 @@ model TripLog {
   date            DateTime
   status          String         @default("COMPLETED") // IN_PROGRESS, COMPLETED, DELAYED
   notes           String?
+}
+
+model Trip {
+  id                String       @id @default(uuid())
+  schoolId          String
+  school            School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  driverId          String
+  driver            Driver       @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  vehicleId         String
+  vehicle           Vehicle      @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  routeId           String
+  route             Route        @relation(fields: [routeId], references: [id], onDelete: Restrict)
+  tripType          TripType
+  status            TripStatus   @default(ACTIVE)
+  startedAt         DateTime     @default(now())
+  endedAt           DateTime?
+  latestLatitude    Float?
+  latestLongitude   Float?
+  latestAccuracy    Float?
+  latestSpeed       Float?
+  latestHeading     Float?
+  latestLocationAt  DateTime?
+  locations         TripLocation[]
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@index([schoolId, status])
+  @@index([schoolId, driverId, status])
+  @@index([schoolId, vehicleId, status])
+}
+
+model TripLocation {
+  id          String   @id @default(uuid())
+  tripId      String
+  trip        Trip     @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  schoolId    String
+  school      School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  latitude    Float
+  longitude   Float
+  accuracy    Float?
+  speed       Float?
+  heading     Float?
+  recordedAt  DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([tripId, recordedAt])
+  @@index([schoolId, recordedAt])
 }
 
 // -------------------------------------------------------------

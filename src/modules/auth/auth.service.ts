@@ -41,11 +41,17 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    if (password && user.passwordHash) {
-      const isMatch = await bcrypt.compare(password, user.passwordHash);
-      if (!isMatch) {
-        throw new UnauthorizedException('Invalid credentials');
-      }
+    if (!user.isActive) {
+      throw new UnauthorizedException('User account is inactive');
+    }
+
+    if (!password || !user.passwordHash) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
+
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
+    if (!isMatch) {
+      throw new UnauthorizedException('Invalid credentials');
     }
 
     const payload = {
@@ -80,10 +86,21 @@ export class AuthService {
   async getProfile(userId: string) {
     return this.prisma.user.findUnique({
       where: { id: userId },
-      include: {
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        phone: true,
+        avatarUrl: true,
+        schoolId: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
         school: true,
         adminProfile: true,
         staffProfile: true,
+        driverProfile: true,
         studentProfile: true,
       },
     });
