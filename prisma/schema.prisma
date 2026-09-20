@@ -246,10 +246,13 @@ model GradeClass {
   school          School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
   name            String         // Grade 1, Grade 2
   code            String
+  classTeacherId  String?
+  classTeacher    StaffProfile?  @relation("GradeClassTeacher", fields: [classTeacherId], references: [id], onDelete: SetNull)
 
   sections        Section[]
   subjects        Subject[]
   students        Student[]
+  timetables      TimetableSlot[]
 }
 
 model Section {
@@ -259,6 +262,8 @@ model Section {
   gradeClass      GradeClass     @relation(fields: [classId], references: [id], onDelete: Cascade)
   name            String         // Section A, Section B
   capacity        Int            @default(40)
+  classTeacherId  String?
+  classTeacher    StaffProfile?  @relation("SectionClassTeacher", fields: [classTeacherId], references: [id], onDelete: SetNull)
 
   students        Student[]
   timetables      TimetableSlot[]
@@ -272,6 +277,9 @@ model Subject {
   gradeClass      GradeClass     @relation(fields: [classId], references: [id], onDelete: Cascade)
   name            String         // Mathematics, Science
   code            String
+  periodsPerWeek  Int?           @default(4)
+  teacherId       String?
+  teacher         StaffProfile?  @relation("SubjectTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
   timetables      TimetableSlot[]
   homeworks       Homework[]
 }
@@ -288,28 +296,36 @@ model Room {
 model Period {
   id              String         @id @default(uuid())
   schoolId        String
-  name            String         // Period 1, Period 2
+  name            String         // Period 1, Period 2, Recess, Lunch
+  periodNumber    Int            @default(1)
   startTime       String         // "08:30"
   endTime         String         // "09:15"
+  isBreak         Boolean        @default(false)
   timetables      TimetableSlot[]
 }
 
 model TimetableSlot {
   id              String         @id @default(uuid())
   schoolId        String
-  academicYearId  String
-  academicYear    AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+  academicYearId  String?
+  academicYear    AcademicYear?  @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
   classId         String
+  gradeClass      GradeClass?    @relation(fields: [classId], references: [id], onDelete: Cascade)
   sectionId       String
   section         Section        @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   subjectId       String
   subject         Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
-  teacherId       String
+  teacherId       String?
+  teacher         StaffProfile?  @relation("TimetableTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
   roomId          String?
   room            Room?          @relation(fields: [roomId], references: [id], onDelete: SetNull)
   periodId        String
   period          Period         @relation(fields: [periodId], references: [id], onDelete: Cascade)
-  dayOfWeek       Int            // 1 = Mon, 2 = Tue, ..., 6 = Sat
+  dayOfWeek       Int            // 1 = Mon, 2 = Tue, 3 = Wed, 4 = Thu, 5 = Fri, 6 = Sat
+  status          String         @default("DRAFT") // "DRAFT", "APPROVED"
+  customNote      String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 }
 
 // -------------------------------------------------------------
@@ -407,10 +423,10 @@ model Student {
   streamGroup     String?
   tenthMarksData  String?
   eleventhMarksData String?
-  classId         String
-  gradeClass      GradeClass     @relation(fields: [classId], references: [id], onDelete: Restrict)
-  sectionId       String
-  section         Section        @relation(fields: [sectionId], references: [id], onDelete: Restrict)
+  classId         String?
+  gradeClass      GradeClass?    @relation(fields: [classId], references: [id], onDelete: SetNull)
+  sectionId       String?
+  section         Section?       @relation(fields: [sectionId], references: [id], onDelete: SetNull)
   academicYearId  String
   academicYear    AcademicYear   @relation(fields: [academicYearId], references: [id], onDelete: Restrict)
   parentId        String?
@@ -820,6 +836,10 @@ model StaffProfile {
   leaves          LeaveApplication[]
   payrolls        PayrollRecord[]
   inchargeRoutes  Route[]
+  managedClasses  GradeClass[]   @relation("GradeClassTeacher")
+  managedSections Section[]      @relation("SectionClassTeacher")
+  taughtSubjects  Subject[]      @relation("SubjectTeacher")
+  timetableSlots  TimetableSlot[] @relation("TimetableTeacher")
 }
 
 model LeaveApplication {

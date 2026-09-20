@@ -32,10 +32,19 @@ export class AuditLogInterceptor implements NestInterceptor {
       return next.handle().pipe(
         tap(async (response) => {
           try {
+            let validUserId: string | undefined = undefined;
+            if (user?.id) {
+              const userExists = await this.prisma.user.findUnique({
+                where: { id: user.id },
+                select: { id: true },
+              });
+              if (userExists) validUserId = userExists.id;
+            }
+
             await this.prisma.auditLog.create({
               data: {
                 schoolId: schoolId || undefined,
-                userId: user?.id || undefined,
+                userId: validUserId,
                 userEmail: user?.email || 'anonymous',
                 module: moduleName.toUpperCase(),
                 action,

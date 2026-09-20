@@ -52,6 +52,12 @@ export class StaffHrService {
       include: {
         department: true,
         user: { select: { id: true, email: true, role: true, isActive: true } },
+        taughtSubjects: {
+          include: { gradeClass: true },
+          orderBy: { name: 'asc' },
+        },
+        managedClasses: true,
+        managedSections: { include: { gradeClass: true } },
       },
       orderBy: { name: 'asc' },
     });
@@ -118,35 +124,114 @@ export class StaffHrService {
       include: {
         department: true,
         user: { select: { id: true, email: true, role: true, isActive: true } },
+        taughtSubjects: {
+          include: { gradeClass: true },
+          orderBy: { name: 'asc' },
+        },
+        timetableSlots: {
+          include: {
+            period: true,
+            section: { include: { gradeClass: true } },
+            subject: true,
+          },
+          orderBy: [{ dayOfWeek: 'asc' }, { period: { periodNumber: 'asc' } }],
+        },
+        managedClasses: true,
+        managedSections: { include: { gradeClass: true } },
       },
     });
   }
 
   async updateStaff(schoolId: string, id: string, data: any) {
+    // 1. Handle Subject assignments and Timetable Slot synchronization
+    if (data.subjectIds && Array.isArray(data.subjectIds)) {
+      // Unassign subjects previously taught by this teacher that were deselected
+      await this.prisma.subject.updateMany({
+        where: {
+          teacherId: id,
+          id: { notIn: data.subjectIds },
+        },
+        data: {
+          teacherId: null,
+        },
+      });
+
+      // Unassign timetable slots for deselected subjects where this teacher was assigned
+      await this.prisma.timetableSlot.updateMany({
+        where: {
+          teacherId: id,
+          subjectId: { notIn: data.subjectIds },
+        },
+        data: {
+          teacherId: null,
+        },
+      });
+
+      // Assign all selected subjects to this teacher
+      if (data.subjectIds.length > 0) {
+        await this.prisma.subject.updateMany({
+          where: {
+            id: { in: data.subjectIds },
+          },
+          data: {
+            teacherId: id,
+          },
+        });
+
+        // Synchronize timetable slots for these subjects: link this teacher
+        await this.prisma.timetableSlot.updateMany({
+          where: {
+            subjectId: { in: data.subjectIds },
+          },
+          data: {
+            teacherId: id,
+          },
+        });
+      }
+    }
+
     return this.prisma.staffProfile.update({
       where: { id },
       data: {
-        name: data.name,
-        gender: data.gender,
+        name: data.name !== undefined ? data.name : undefined,
+        employeeCode: data.employeeCode !== undefined ? data.employeeCode : undefined,
+        gender: data.gender !== undefined ? data.gender : undefined,
         dob: data.dob ? new Date(data.dob) : undefined,
-        bloodGroup: data.bloodGroup,
-        photoUrl: data.photoUrl,
-        aadharNumber: data.aadharNumber,
-        qualification: data.qualification,
-        specialization: data.specialization,
+        bloodGroup: data.bloodGroup !== undefined ? data.bloodGroup : undefined,
+        photoUrl: data.photoUrl !== undefined ? data.photoUrl : undefined,
+        aadharNumber: data.aadharNumber !== undefined ? data.aadharNumber : undefined,
+        qualification: data.qualification !== undefined ? data.qualification : undefined,
+        specialization: data.specialization !== undefined ? data.specialization : undefined,
         experienceYears: data.experienceYears !== undefined ? Number(data.experienceYears) : undefined,
-        employmentType: data.employmentType,
-        emergencyPhone: data.emergencyPhone,
-        address: data.address,
-        designation: data.designation,
-        role: data.role,
-        departmentId: data.departmentId,
-        phone: data.phone,
-        email: data.email,
+        employmentType: data.employmentType !== undefined ? data.employmentType : undefined,
+        emergencyPhone: data.emergencyPhone !== undefined ? data.emergencyPhone : undefined,
+        address: data.address !== undefined ? data.address : undefined,
+        designation: data.designation !== undefined ? data.designation : undefined,
+        role: data.role !== undefined ? data.role : undefined,
+        departmentId: data.departmentId !== undefined ? (data.departmentId || null) : undefined,
+        phone: data.phone !== undefined ? data.phone : undefined,
+        email: data.email !== undefined ? data.email : undefined,
         salary: data.salary !== undefined ? Number(data.salary) : undefined,
-        status: data.status,
+        status: data.status !== undefined ? data.status : undefined,
       },
-      include: { department: true, user: true },
+      include: {
+        department: true,
+        user: { select: { id: true, email: true, role: true, isActive: true } },
+        taughtSubjects: {
+          include: { gradeClass: true },
+          orderBy: { name: 'asc' },
+        },
+        timetableSlots: {
+          include: {
+            period: true,
+            section: { include: { gradeClass: true } },
+            subject: true,
+          },
+          orderBy: [{ dayOfWeek: 'asc' }, { period: { periodNumber: 'asc' } }],
+        },
+        managedClasses: true,
+        managedSections: { include: { gradeClass: true } },
+      },
     });
   }
 
