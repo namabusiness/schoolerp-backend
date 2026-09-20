@@ -34,4 +34,18 @@ export class AttendanceController {
   async getStats(@Tenant() schoolId: string, @Query('sectionId') sectionId?: string) {
     return this.attendanceService.getMonthlyStats(schoolId, sectionId);
   }
+
+  @Get('monthly-matrix')
+  async getMonthlyMatrix(
+    @Tenant() schoolId: string,
+    @Query('sectionId') sectionId: string,
+    @Query('year') year: string,
+    @Query('month') month: string,
+  ) {
+    const now = new Date();
+    const y = year ? parseInt(year, 10) : now.getFullYear();
+    const m = month ? parseInt(month, 10) : now.getMonth() + 1;
+    return this.attendanceService.getMonthlyMatrix(schoolId, sectionId, y, m);
+  }
 }
+

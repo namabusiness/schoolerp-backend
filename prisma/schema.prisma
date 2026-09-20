@@ -253,6 +253,7 @@ model GradeClass {
   subjects        Subject[]
   students        Student[]
   timetables      TimetableSlot[]
+  questionPapers  QuestionPaper[]
 }
 
 model Section {
@@ -282,6 +283,7 @@ model Subject {
   teacher         StaffProfile?  @relation("SubjectTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
   timetables      TimetableSlot[]
   homeworks       Homework[]
+  questionPapers  QuestionPaper[]
 }
 
 model Room {
@@ -599,6 +601,27 @@ model ReportCard {
   isPublished     Boolean        @default(false)
 }
 
+model QuestionPaper {
+  id              String         @id @default(uuid())
+  schoolId        String
+  classId         String
+  gradeClass      GradeClass     @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subjectId       String
+  subject         Subject        @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacherId       String
+  teacher         StaffProfile   @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  examCategory    String         // UNIT_TEST, QUARTERLY, HALF_YEARLY, ANNUAL, DAILY_UNIT_TEST, WEEKLY_UNIT_TEST, MONTHLY_UNIT_TEST
+  title           String
+  description     String?
+  fileUrl         String
+  fileName        String?
+  fileSize        String?
+  maxMarks        Float          @default(100)
+  durationMinutes Int?           @default(90)
+  examDate        DateTime?
+  uploadedAt      DateTime       @default(now())
+}
+
 // -------------------------------------------------------------
 // FEES & FINANCE
 // -------------------------------------------------------------
@@ -840,6 +863,7 @@ model StaffProfile {
   managedSections Section[]      @relation("SectionClassTeacher")
   taughtSubjects  Subject[]      @relation("SubjectTeacher")
   timetableSlots  TimetableSlot[] @relation("TimetableTeacher")
+  questionPapers  QuestionPaper[]
 }
 
 model LeaveApplication {

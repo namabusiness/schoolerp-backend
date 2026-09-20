@@ -95,7 +95,7 @@ export class StaffHrService {
       }
     }
 
-    return this.prisma.staffProfile.create({
+    const createdStaff = await this.prisma.staffProfile.create({
       data: {
         schoolId: resolvedId,
         userId,
@@ -112,13 +112,13 @@ export class StaffHrService {
         employmentType: data.employmentType || 'FULL_TIME',
         emergencyPhone: data.emergencyPhone || null,
         address: data.address || null,
-        designation: data.designation || 'Teacher',
+        designation: data.designation || (data.role === 'DRIVER' ? 'Fleet Driver' : data.role === 'TRANSPORT_MANAGER' ? 'Transport Manager' : 'Teacher'),
         role: data.role || 'TEACHER',
         departmentId: data.departmentId || null,
         phone: data.phone,
         email: data.email,
         joiningDate: data.joiningDate ? new Date(data.joiningDate) : new Date(),
-        salary: Number(data.salary) || 3500,
+        salary: Number(data.salary) || 35000,
         status: data.status || 'ACTIVE',
       },
       include: {
@@ -140,6 +140,54 @@ export class StaffHrService {
         managedSections: { include: { gradeClass: true } },
       },
     });
+
+    // If role is DRIVER, also create or link a Driver record
+    if (data.role === 'DRIVER' || data.role === Role.DRIVER) {
+      const existingDriver = await this.prisma.driver.findFirst({
+        where: { OR: [{ userId }, { phone: data.phone || '' }] },
+      });
+      if (!existingDriver) {
+        await this.prisma.driver.create({
+          data: {
+            schoolId: resolvedId,
+            userId,
+            name: data.name,
+            phone: data.phone || '9876543210',
+            licenseNumber: data.licenseNumber || data.aadharNumber || `DL-${Date.now().toString().slice(-6)}`,
+            status: 'ACTIVE',
+            photoUrl: data.photoUrl || null,
+            address: data.address || null,
+            emergencyContact: data.emergencyPhone || null,
+          },
+        });
+      } else if (userId) {
+        await this.prisma.driver.update({
+          where: { id: existingDriver.id },
+          data: { userId, schoolId: resolvedId },
+        });
+      }
+    }
+
+    // If role is PRINCIPAL or SCHOOL_ADMIN, ensure SchoolAdmin entry exists
+    if (data.role === 'PRINCIPAL' || data.role === 'SCHOOL_ADMIN') {
+      if (userId) {
+        const existingAdmin = await this.prisma.schoolAdmin.findUnique({
+          where: { userId },
+        });
+        if (!existingAdmin) {
+          await this.prisma.schoolAdmin.create({
+            data: {
+              schoolId: resolvedId,
+              userId,
+              adminRole: data.role as Role,
+              permissions: JSON.stringify(['ALL']),
+            },
+          });
+        }
+      }
+    }
+
+    return createdStaff;
   }
 
   async updateStaff(schoolId: string, id: string, data: any) {

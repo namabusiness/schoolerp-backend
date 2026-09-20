@@ -364,6 +364,7 @@ export class SuperAdminService {
     schoolId: string;
     name: string;
     email: string;
+    phone?: string;
     password?: string;
     role: Role;
     profileType?: 'STAFF' | 'DRIVER' | 'ADMIN';
@@ -385,6 +386,7 @@ export class SuperAdminService {
           schoolId: data.schoolId,
           passwordHash,
           name: data.name,
+          phone: data.phone || existingUser.phone,
           isActive: true,
         },
       });
@@ -395,23 +397,122 @@ export class SuperAdminService {
           name: data.name,
           role: data.role,
           schoolId: data.schoolId,
+          phone: data.phone || null,
           passwordHash,
           isActive: true,
         },
       });
     }
 
-    // Link to profile if specified
+    // 1. Explicit profile link if profileId supplied
     if (data.profileType === 'STAFF' && data.profileId) {
       await this.prisma.staffProfile.update({
         where: { id: data.profileId },
-        data: { userId: user.id },
+        data: { userId: user.id, schoolId: data.schoolId },
       });
     } else if (data.profileType === 'DRIVER' && data.profileId) {
       await this.prisma.driver.update({
         where: { id: data.profileId },
-        data: { userId: user.id },
+        data: { userId: user.id, schoolId: data.schoolId },
       });
+    } else {
+      // 2. Automatic profile provisioning according to the role and school
+      if (['TEACHER', 'STAFF', 'TRANSPORT_MANAGER', 'PRINCIPAL'].includes(data.role)) {
+        const existingStaff = await this.prisma.staffProfile.findFirst({
+          where: { OR: [{ userId: user.id }, { email: data.email }] },
+        });
+
+        if (!existingStaff) {
+          const empCode = `EMP-${Date.now().toString().slice(-5)}`;
+          let designation = 'Staff Member';
+          if (data.role === 'TEACHER') designation = 'Teacher';
+          else if (data.role === 'PRINCIPAL') designation = 'Principal';
+          else if (data.role === 'TRANSPORT_MANAGER') designation = 'Transport Manager';
+
+          await this.prisma.staffProfile.create({
+            data: {
+              schoolId: data.schoolId,
+              userId: user.id,
+              name: data.name,
+              email: data.email,
+              phone: data.phone || '9876543210',
+              employeeCode: empCode,
+              role: data.role,
+              designation,
+              status: 'ACTIVE',
+              joiningDate: new Date(),
+            } as any,
+          });
+        } else {
+          await this.prisma.staffProfile.update({
+            where: { id: existingStaff.id },
+            data: {
+              userId: user.id,
+              schoolId: data.schoolId,
+              name: data.name,
+              role: data.role,
+            },
+          });
+        }
+      }
+
+      if (data.role === 'DRIVER') {
+        const existingDriver = await this.prisma.driver.findFirst({
+          where: {
+            OR: [
+              { userId: user.id },
+              ...(data.phone ? [{ phone: data.phone }] : []),
+            ],
+          },
+        });
+
+        if (!existingDriver) {
+          await this.prisma.driver.create({
+            data: {
+              schoolId: data.schoolId,
+              userId: user.id,
+              name: data.name,
+              phone: data.phone || '9876543210',
+              licenseNumber: `DL-${Date.now().toString().slice(-6)}`,
+              status: 'ACTIVE',
+            },
+          });
+        } else {
+          await this.prisma.driver.update({
+            where: { id: existingDriver.id },
+            data: {
+              userId: user.id,
+              schoolId: data.schoolId,
+              name: data.name,
+            },
+          });
+        }
+      }
+
+      if (data.role === 'SCHOOL_ADMIN' || data.role === 'PRINCIPAL') {
+        const existingAdmin = await this.prisma.schoolAdmin.findUnique({
+          where: { userId: user.id },
+        });
+
+        if (!existingAdmin) {
+          await this.prisma.schoolAdmin.create({
+            data: {
+              schoolId: data.schoolId,
+              userId: user.id,
+              adminRole: data.role,
+              permissions: JSON.stringify(['ALL']),
+            },
+          });
+        } else {
+          await this.prisma.schoolAdmin.update({
+            where: { id: existingAdmin.id },
+            data: {
+              schoolId: data.schoolId,
+              adminRole: data.role,
+            },
+          });
+        }
+      }
     }
 
     return user;

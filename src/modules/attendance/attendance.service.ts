@@ -135,4 +135,112 @@ export class AttendanceService {
       attendanceRate: total > 0 ? Math.round((present / total) * 100) : 100,
     };
   }
+
+  private async resolveSchoolId(schoolId: string): Promise<string> {
+    if (!schoolId) return 'school-greenwood-high';
+    const byId = await this.prisma.school.findUnique({ where: { id: schoolId } });
+    if (byId) return byId.id;
+
+    const bySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
+    if (bySlug) return bySlug.id;
+
+    const byPrefix = await this.prisma.school.findUnique({ where: { id: `school-${schoolId}` } });
+    if (byPrefix) return byPrefix.id;
+
+    const fallback = await this.prisma.school.findFirst();
+    return fallback?.id || 'school-greenwood-high';
+  }
+
+  // Monthly Matrix for Excel / Sheet Export
+  async getMonthlyMatrix(schoolId: string, sectionId: string, year: number, month: number) {
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0, 23, 59, 59);
+    const daysInMonth = endDate.getDate();
+
+    const section = await this.prisma.section.findUnique({
+      where: { id: sectionId },
+      include: { gradeClass: true },
+    });
+
+    const students = await this.prisma.student.findMany({
+      where: {
+        OR: [{ schoolId: resolvedId }, { schoolId }],
+        sectionId,
+        status: 'ACTIVE',
+      },
+      orderBy: [{ rollNumber: 'asc' }, { firstName: 'asc' }],
+    });
+
+    const sessions = await this.prisma.attendanceSession.findMany({
+      where: {
+        OR: [{ schoolId: resolvedId }, { schoolId }],
+        sectionId,
+        date: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      include: {
+        records: true,
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    const studentRows = students.map((student) => {
+      const dailyStatus: Record<number, string> = {};
+      let presentCount = 0;
+      let absentCount = 0;
+      let lateCount = 0;
+      let leaveCount = 0;
+      let halfDayCount = 0;
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const session = sessions.find((s) => new Date(s.date).getDate() === day);
+        if (session) {
+          const record = session.records.find((r) => r.studentId === student.id);
+          const status = record ? record.status : 'NOT_MARKED';
+          dailyStatus[day] = status;
+          if (status === 'PRESENT') presentCount++;
+          else if (status === 'ABSENT') absentCount++;
+          else if (status === 'LATE') lateCount++;
+          else if (status === 'LEAVE') leaveCount++;
+          else if (status === 'HALF_DAY') halfDayCount++;
+        } else {
+          const curDate = new Date(year, month - 1, day);
+          dailyStatus[day] = curDate.getDay() === 0 ? 'HOLIDAY' : '-';
+        }
+      }
+
+      const totalWorkingDays = sessions.length;
+      const rate = totalWorkingDays > 0 ? Math.round(((presentCount + (lateCount * 0.5) + (halfDayCount * 0.5)) / totalWorkingDays) * 100) : 100;
+
+      return {
+        studentId: student.id,
+        admissionNumber: student.admissionNumber,
+        rollNumber: student.rollNumber || '-',
+        name: `${student.firstName} ${student.lastName}`.trim(),
+        gender: student.gender,
+        dailyStatus,
+        presentCount,
+        absentCount,
+        lateCount,
+        leaveCount,
+        halfDayCount,
+        totalWorkingDays,
+        attendanceRate: rate,
+      };
+    });
+
+    return {
+      year,
+      month,
+      daysInMonth,
+      sectionName: section?.name || 'Section A',
+      className: section?.gradeClass?.name || 'Class',
+      totalWorkingDays: sessions.length,
+      students: studentRows,
+    };
+  }
 }
+
