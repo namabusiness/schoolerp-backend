@@ -254,6 +254,7 @@ model GradeClass {
   students        Student[]
   timetables      TimetableSlot[]
   questionPapers  QuestionPaper[]
+  lessonPlans     LessonPlan[]
 }
 
 model Section {
@@ -284,6 +285,7 @@ model Subject {
   timetables      TimetableSlot[]
   homeworks       Homework[]
   questionPapers  QuestionPaper[]
+  lessonPlans     LessonPlan[]
 }
 
 model Room {
@@ -401,6 +403,8 @@ model ParentGuardian {
   address         String?
   aadharNumber    String?
   students        Student[]
+  leaveApplications StudentLeaveApplication[]
+  messages          ParentTeacherMessage[]
 }
 
 model Student {
@@ -448,6 +452,8 @@ model Student {
   incidents       IncidentLog[]
   certificates    IssuedCertificate[]
   transport       StudentTransportAssignment?
+  leaveApplications StudentLeaveApplication[]
+  parentMessages    ParentTeacherMessage[]
 }
 
 model StudentDocument {
@@ -535,6 +541,8 @@ model HomeworkSubmission {
   status          String         @default("PENDING") // PENDING, REVIEWED, LATE
   grade           String?
   feedback        String?
+  allowResubmit   Boolean        @default(false)
+  submittedByRole String?        @default("STUDENT") // STUDENT or PARENT
 }
 
 // -------------------------------------------------------------
@@ -864,6 +872,8 @@ model StaffProfile {
   taughtSubjects  Subject[]      @relation("SubjectTeacher")
   timetableSlots  TimetableSlot[] @relation("TimetableTeacher")
   questionPapers  QuestionPaper[]
+  lessonPlans     LessonPlan[]
+  parentMessages  ParentTeacherMessage[]
 }
 
 model LeaveApplication {
@@ -992,3 +1002,63 @@ model PromotionRecord {
   transportCleared Boolean          @default(true)
   processedAt     DateTime          @default(now())
 }
+
+// -------------------------------------------------------------
+// PARENT & TEACHER CONNECTED MODULES
+// -------------------------------------------------------------
+
+model StudentLeaveApplication {
+  id              String          @id @default(uuid())
+  schoolId        String
+  studentId       String
+  student         Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  parentId        String?
+  parent          ParentGuardian? @relation(fields: [parentId], references: [id], onDelete: SetNull)
+  leaveType       String          // SICK, CASUAL, MEDICAL, FAMILY, OTHER
+  startDate       DateTime
+  endDate         DateTime
+  reason          String
+  status          LeaveStatus     @default(PENDING) // PENDING, APPROVED, REJECTED
+  reviewedBy      String?         // Staff / Teacher Name or ID
+  reviewNote      String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+model LessonPlan {
+  id              String          @id @default(uuid())
+  schoolId        String
+  classId         String
+  gradeClass      GradeClass      @relation(fields: [classId], references: [id], onDelete: Cascade)
+  subjectId       String
+  subject         Subject         @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacherId       String
+  teacher         StaffProfile    @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  title           String          // Chapter / Topic name
+  description     String?         // Learning outcomes & syllabus details
+  plannedDate     DateTime?
+  completedDate   DateTime?
+  status          String          @default("PLANNED") // PLANNED, IN_PROGRESS, COMPLETED
+  completionRate  Int             @default(0)         // 0 - 100%
+  resourcesUrl    String?         // Study material URL or notes
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+}
+
+model ParentTeacherMessage {
+  id              String          @id @default(uuid())
+  schoolId        String
+  studentId       String
+  student         Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  parentId        String
+  parent          ParentGuardian  @relation(fields: [parentId], references: [id], onDelete: Cascade)
+  teacherId       String
+  teacher         StaffProfile    @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  senderRole      String          // TEACHER or PARENT
+  senderName      String
+  subject         String?
+  message         String
+  isRead          Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+}
+

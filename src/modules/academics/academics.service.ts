@@ -1200,5 +1200,73 @@ export class AcademicsService {
       },
     });
   }
+
+  // -------------------------------------------------------------
+  // LESSON PLANS & SYLLABUS PROGRESS
+  // -------------------------------------------------------------
+  async getLessonPlans(schoolId: string, params: { classId?: string; subjectId?: string; teacherId?: string }) {
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const where: any = {
+      OR: [{ schoolId: resolvedId }, { schoolId }],
+    };
+    if (params.classId) where.classId = params.classId;
+    if (params.subjectId) where.subjectId = params.subjectId;
+    if (params.teacherId) where.teacherId = params.teacherId;
+
+    return this.prisma.lessonPlan.findMany({
+      where,
+      include: {
+        gradeClass: true,
+        subject: true,
+        teacher: {
+          select: { id: true, name: true, employeeCode: true, email: true },
+        },
+      },
+      orderBy: [{ plannedDate: 'asc' }, { createdAt: 'desc' }],
+    });
+  }
+
+  async createLessonPlan(schoolId: string, data: any) {
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    return this.prisma.lessonPlan.create({
+      data: {
+        schoolId: resolvedId,
+        classId: data.classId,
+        subjectId: data.subjectId,
+        teacherId: data.teacherId,
+        title: data.title,
+        description: data.description,
+        plannedDate: data.plannedDate ? new Date(data.plannedDate) : null,
+        completedDate: data.completedDate ? new Date(data.completedDate) : null,
+        status: data.status || 'PLANNED',
+        completionRate: Number(data.completionRate) || 0,
+        resourcesUrl: data.resourcesUrl,
+      },
+      include: {
+        gradeClass: true,
+        subject: true,
+      },
+    });
+  }
+
+  async updateLessonPlan(schoolId: string, id: string, data: any) {
+    return this.prisma.lessonPlan.update({
+      where: { id },
+      data: {
+        ...(data.title && { title: data.title }),
+        ...(data.description !== undefined && { description: data.description }),
+        ...(data.status && { status: data.status }),
+        ...(data.completionRate !== undefined && { completionRate: Number(data.completionRate) }),
+        ...(data.resourcesUrl !== undefined && { resourcesUrl: data.resourcesUrl }),
+        ...(data.plannedDate && { plannedDate: new Date(data.plannedDate) }),
+        ...(data.completedDate && { completedDate: new Date(data.completedDate) }),
+      },
+    });
+  }
+
+  async deleteLessonPlan(schoolId: string, id: string) {
+    return this.prisma.lessonPlan.delete({ where: { id } });
+  }
 }
+
 

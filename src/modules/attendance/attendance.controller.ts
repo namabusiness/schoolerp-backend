@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { AttendanceService } from './attendance.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Tenant } from '../../common/decorators/tenant.decorator';
@@ -47,5 +47,40 @@ export class AttendanceController {
     const m = month ? parseInt(month, 10) : now.getMonth() + 1;
     return this.attendanceService.getMonthlyMatrix(schoolId, sectionId, y, m);
   }
+
+  // Student Leave Applications (Parent & Teacher Two-Way Flow)
+  @Post('student-leave')
+  async applyStudentLeave(@Tenant() schoolId: string, @Body() body: any) {
+    return this.attendanceService.applyStudentLeave(schoolId, body);
+  }
+
+  @Get('student-leave')
+  async getStudentLeaves(@Tenant() schoolId: string, @Query() query: any) {
+    return this.attendanceService.getStudentLeaves(schoolId, query);
+  }
+
+  @Patch('student-leave/:id/decision')
+  async decideStudentLeave(
+    @Tenant() schoolId: string,
+    @Param('id') id: string,
+    @Body() body: { decision: 'APPROVED' | 'REJECTED'; reviewerName?: string; reviewNote?: string },
+  ) {
+    return this.attendanceService.decideStudentLeave(
+      schoolId,
+      id,
+      body.decision,
+      body.reviewerName || 'Class Teacher',
+      body.reviewNote,
+    );
+  }
+
+  @Get('student/:studentId')
+  async getStudentAttendance(
+    @Tenant() schoolId: string,
+    @Param('studentId') studentId: string,
+  ) {
+    return this.attendanceService.getStudentAttendance(schoolId, studentId);
+  }
 }
+
 

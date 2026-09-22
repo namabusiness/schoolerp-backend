@@ -42,6 +42,22 @@ export class AuthService {
             },
           },
           studentProfile: true,
+          parentProfile: {
+            include: {
+              students: {
+                include: {
+                  gradeClass: true,
+                  section: true,
+                  transport: {
+                    include: {
+                      route: { include: { vehicle: true, driver: true } },
+                      stop: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
         },
       });
 
@@ -125,6 +141,79 @@ export class AuthService {
         }
       }
 
+      // If still not found, check ParentGuardian table
+      if (!user) {
+        const parent = await this.prisma.parentGuardian.findFirst({
+          where: { email: { equals: cleanEmail, mode: 'insensitive' } },
+          include: {
+            user: {
+              include: {
+                school: true,
+                adminProfile: true,
+                parentProfile: {
+                  include: {
+                    students: {
+                      include: {
+                        gradeClass: true,
+                        section: true,
+                        transport: {
+                          include: {
+                            route: { include: { vehicle: true, driver: true } },
+                            stop: true,
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        });
+
+        if (parent?.user) {
+          user = parent.user;
+        } else if (parent) {
+          const hash = password ? await bcrypt.hash(password, 10) : await bcrypt.hash('Parent@123', 10);
+          const newUser = await this.prisma.user.create({
+            data: {
+              email: parent.email || cleanEmail,
+              name: parent.guardianName || parent.fatherName || parent.motherName || 'Parent',
+              role: 'PARENT',
+              schoolId: parent.schoolId,
+              passwordHash: hash,
+            },
+          });
+          await this.prisma.parentGuardian.update({
+            where: { id: parent.id },
+            data: { userId: newUser.id },
+          });
+          user = await this.prisma.user.findUnique({
+            where: { id: newUser.id },
+            include: {
+              school: true,
+              adminProfile: true,
+              parentProfile: {
+                include: {
+                  students: {
+                    include: {
+                      gradeClass: true,
+                      section: true,
+                      transport: {
+                        include: {
+                          route: { include: { vehicle: true, driver: true } },
+                          stop: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          });
+        }
+      }
+
       if (user) {
         // Auto-link staffProfile if missing on user but exists in database
         if (!user.staffProfile && ['TEACHER', 'STAFF', 'PRINCIPAL', 'TRANSPORT_MANAGER'].includes(user.role)) {
@@ -182,6 +271,41 @@ export class AuthService {
           }
         }
 
+        // Auto-link parentProfile if missing on user but exists in database
+        if (!user.parentProfile && user.role === 'PARENT') {
+          const linkedParent = await this.prisma.parentGuardian.findFirst({
+            where: {
+              OR: [
+                { userId: user.id },
+                { email: { equals: cleanEmail, mode: 'insensitive' } },
+              ],
+            },
+            include: {
+              students: {
+                include: {
+                  gradeClass: true,
+                  section: true,
+                  transport: {
+                    include: {
+                      route: { include: { vehicle: true, driver: true } },
+                      stop: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+          if (linkedParent) {
+            if (linkedParent.userId !== user.id) {
+              await this.prisma.parentGuardian.update({
+                where: { id: linkedParent.id },
+                data: { userId: user.id },
+              });
+            }
+            user.parentProfile = linkedParent;
+          }
+        }
+
         // Verify password if user has passwordHash
         if (password && user.passwordHash) {
           const isMatch = await bcrypt.compare(password, user.passwordHash);
@@ -192,7 +316,7 @@ export class AuthService {
         }
 
         const isSuperAdmin = user.role === 'SUPER_ADMIN';
-        const payload = {
+        const tokenPayload = {
           id: user.id,
           email: user.email,
           name: user.name,
@@ -201,11 +325,16 @@ export class AuthService {
           schoolId: isSuperAdmin ? null : (user.schoolId || 'school-greenwood-high'),
           schoolSlug: isSuperAdmin ? null : (user.school?.slug || 'greenwood-high'),
           staffId: user.staffProfile?.id,
+          parentId: user.parentProfile?.id,
+        };
+        const payload = {
+          ...tokenPayload,
           staffProfile: user.staffProfile,
           driverProfile: user.driverProfile,
           adminProfile: user.adminProfile,
+          parentProfile: user.parentProfile,
         };
-        const token = this.jwtService.sign(payload);
+        const token = this.jwtService.sign(tokenPayload);
         return {
           accessToken: token,
           user: payload,
@@ -255,7 +384,7 @@ export class AuthService {
       });
 
       if (realTeacherUser) {
-        const payload = {
+        const tokenPayload = {
           id: realTeacherUser.id,
           email: realTeacherUser.email,
           name: realTeacherUser.name,
@@ -263,9 +392,61 @@ export class AuthService {
           schoolId: realTeacherUser.schoolId || 'school-greenwood-high',
           schoolSlug: realTeacherUser.school?.slug || 'greenwood-high',
           staffId: realTeacherUser.staffProfile?.id,
+        };
+        const payload = {
+          ...tokenPayload,
           staffProfile: realTeacherUser.staffProfile,
         };
-        const token = this.jwtService.sign(payload);
+        const token = this.jwtService.sign(tokenPayload);
+        return {
+          accessToken: token,
+          user: payload,
+        };
+      }
+    }
+
+    if (demoRole === 'PARENT') {
+      const realParentUser = await this.prisma.user.findFirst({
+        where: {
+          role: 'PARENT',
+          parentProfile: { isNot: null },
+        },
+        include: {
+          school: true,
+          parentProfile: {
+            include: {
+              students: {
+                include: {
+                  gradeClass: true,
+                  section: true,
+                  transport: {
+                    include: {
+                      route: { include: { vehicle: true, driver: true } },
+                      stop: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (realParentUser) {
+        const tokenPayload = {
+          id: realParentUser.id,
+          email: realParentUser.email,
+          name: realParentUser.name,
+          role: 'PARENT',
+          schoolId: realParentUser.schoolId || 'school-greenwood-high',
+          schoolSlug: realParentUser.school?.slug || 'greenwood-high',
+          parentId: realParentUser.parentProfile?.id,
+        };
+        const payload = {
+          ...tokenPayload,
+          parentProfile: realParentUser.parentProfile,
+        };
+        const token = this.jwtService.sign(tokenPayload);
         return {
           accessToken: token,
           user: payload,
@@ -336,6 +517,22 @@ export class AuthService {
             routes: true,
           },
         },
+        parentProfile: {
+          include: {
+            students: {
+              include: {
+                gradeClass: true,
+                section: true,
+                transport: {
+                  include: {
+                    route: { include: { vehicle: true, driver: true } },
+                    stop: true,
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -393,6 +590,65 @@ export class AuthService {
           user.driverProfile = linkedDriver;
         }
       }
+
+      if (!user.parentProfile && user.role === 'PARENT') {
+        const linkedParent = await this.prisma.parentGuardian.findFirst({
+          where: {
+            OR: [
+              { userId: user.id },
+              ...(user.email ? [{ email: { equals: user.email, mode: 'insensitive' as const } }] : []),
+            ],
+          },
+          include: {
+            students: {
+              include: {
+                gradeClass: true,
+                section: true,
+                transport: {
+                  include: {
+                    route: { include: { vehicle: true, driver: true } },
+                    stop: true,
+                  },
+                },
+              },
+            },
+          },
+        });
+        if (linkedParent) {
+          if (linkedParent.userId !== user.id) {
+            await this.prisma.parentGuardian.update({
+              where: { id: linkedParent.id },
+              data: { userId: user.id },
+            });
+          }
+          user.parentProfile = linkedParent;
+        } else {
+          // If no parent found specifically, link to first parent in this school with students
+          const defaultParent = await this.prisma.parentGuardian.findFirst({
+            where: {
+              schoolId: user.schoolId || 'school-greenwood-high',
+              students: { some: {} },
+            },
+            include: {
+              students: {
+                include: {
+                  gradeClass: true,
+                  section: true,
+                  transport: {
+                    include: {
+                      route: { include: { vehicle: true, driver: true } },
+                      stop: true,
+                    },
+                  },
+                },
+              },
+            },
+          });
+          if (defaultParent) {
+            user.parentProfile = defaultParent;
+          }
+        }
+      }
     }
 
     if (!user && userId.startsWith('demo-teacher')) {
@@ -418,6 +674,32 @@ export class AuthService {
             include: {
               vehicles: true,
               routes: true,
+            },
+          },
+        },
+      });
+    }
+
+    if (!user && userId.startsWith('demo-parent')) {
+      user = await this.prisma.user.findFirst({
+        where: { role: 'PARENT', parentProfile: { isNot: null } },
+        include: {
+          school: true,
+          adminProfile: true,
+          parentProfile: {
+            include: {
+              students: {
+                include: {
+                  gradeClass: true,
+                  section: true,
+                  transport: {
+                    include: {
+                      route: { include: { vehicle: true, driver: true } },
+                      stop: true,
+                    },
+                  },
+                },
+              },
             },
           },
         },

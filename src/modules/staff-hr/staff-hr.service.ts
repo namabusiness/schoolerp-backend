@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LeaveStatus, Role } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
@@ -305,10 +305,38 @@ export class StaffHrService {
 
   async applyLeave(schoolId: string, data: any) {
     const resolvedId = await this.resolveSchoolId(schoolId);
+    let targetStaffId = data.staffId;
+
+    // Verify or resolve staffId to an existing StaffProfile
+    let staff = null;
+    if (targetStaffId && targetStaffId !== 'staff-default') {
+      staff = await this.prisma.staffProfile.findFirst({
+        where: {
+          OR: [
+            { id: targetStaffId },
+            { userId: targetStaffId },
+          ],
+        },
+      });
+    }
+
+    if (!staff) {
+      // Fallback to first staff in this school
+      staff = await this.prisma.staffProfile.findFirst({
+        where: {
+          OR: [{ schoolId: resolvedId }, { schoolId }],
+        },
+      });
+    }
+
+    if (!staff) {
+      throw new BadRequestException('No valid staff profile found to submit leave application.');
+    }
+
     return this.prisma.leaveApplication.create({
       data: {
         schoolId: resolvedId,
-        staffId: data.staffId,
+        staffId: staff.id,
         leaveType: data.leaveType || 'CASUAL',
         startDate: new Date(data.startDate),
         endDate: new Date(data.endDate),

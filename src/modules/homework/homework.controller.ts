@@ -23,6 +23,11 @@ export class HomeworkController {
     return this.homeworkService.createHomework(schoolId, body);
   }
 
+  @Get(':id/submissions')
+  async getSubmissions(@Tenant() schoolId: string, @Param('id') homeworkId: string) {
+    return this.homeworkService.getSubmissions(schoolId, homeworkId);
+  }
+
   @Post(':id/submit')
   async submitHomework(
     @Tenant() schoolId: string,
@@ -36,8 +41,9 @@ export class HomeworkController {
   async gradeSubmission(
     @Tenant() schoolId: string,
     @Param('submissionId') submissionId: string,
-    @Body() body: { grade: string; feedback: string },
+    @Body() body: { grade: string; feedback: string; allowResubmit?: boolean },
   ) {
     return this.homeworkService.gradeSubmission(schoolId, submissionId, body);
   }
 }
+

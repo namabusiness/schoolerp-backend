@@ -348,4 +348,89 @@ export class TransportService {
       },
     });
   }
+
+  // -------------------------------------------------------------
+  // ISOLATED STUDENT TRANSPORT DETAILS FOR PARENT
+  // -------------------------------------------------------------
+  async getStudentTransport(schoolId: string, studentId: string) {
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const assignment = await this.prisma.studentTransportAssignment.findFirst({
+      where: {
+        studentId,
+        OR: [{ schoolId: resolvedId }, { schoolId }],
+      },
+      include: {
+        route: {
+          include: {
+            vehicle: true,
+            driver: true,
+            stops: { orderBy: { stopOrder: 'asc' } },
+            trips: { orderBy: { date: 'desc' }, take: 5 },
+          },
+        },
+        stop: true,
+        student: { select: { id: true, firstName: true, lastName: true, admissionNumber: true } },
+      },
+    });
+
+    if (!assignment) {
+      return { isAssigned: false, message: 'No transport assignment found for this student.' };
+    }
+
+    const latestTrip = assignment.route.trips?.[0] || null;
+
+    return {
+      isAssigned: true,
+      student: assignment.student,
+      route: {
+        id: assignment.route.id,
+        name: assignment.route.name,
+        code: assignment.route.code,
+        startLocation: assignment.route.startLocation,
+        endLocation: assignment.route.endLocation,
+      },
+      stop: {
+        id: assignment.stop.id,
+        name: assignment.stop.stopName,
+        pickupTime: assignment.stop.pickupTime,
+        dropTime: assignment.stop.dropTime,
+        landmark: assignment.stop.landmark,
+        order: assignment.stop.stopOrder,
+      },
+      vehicle: assignment.route.vehicle
+        ? {
+            id: assignment.route.vehicle.id,
+            registrationNo: assignment.route.vehicle.registrationNo,
+            model: assignment.route.vehicle.model,
+            capacity: assignment.route.vehicle.capacity,
+            type: assignment.route.vehicle.vehicleType,
+            status: assignment.route.vehicle.status,
+          }
+        : null,
+      driver: assignment.route.driver
+        ? {
+            name: assignment.route.driver.name,
+            phone: assignment.route.driver.phone,
+            photoUrl: assignment.route.driver.photoUrl,
+            status: assignment.route.driver.status,
+          }
+        : {
+            name: assignment.route.driverName || 'Designated Fleet Driver',
+            phone: assignment.route.driverPhone || 'Contact School Transport Desk',
+          },
+      latestTrip: latestTrip
+        ? {
+            tripType: latestTrip.tripType,
+            status: latestTrip.status,
+            date: latestTrip.date,
+            notes: latestTrip.notes,
+          }
+        : {
+            tripType: 'MORNING_PICKUP',
+            status: 'SCHEDULED',
+            notes: 'Operating on daily scheduled route timing',
+          },
+    };
+  }
 }
+

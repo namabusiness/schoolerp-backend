@@ -242,5 +242,216 @@ export class AttendanceService {
       students: studentRows,
     };
   }
+
+  // -------------------------------------------------------------
+  // STUDENT LEAVE APPLICATIONS (Parent-Teacher Two-Way Sync)
+  // -------------------------------------------------------------
+
+  async applyStudentLeave(schoolId: string, data: {
+    studentId: string;
+    parentId?: string;
+    leaveType: string;
+    startDate: string;
+    endDate: string;
+    reason: string;
+  }) {
+    const resolvedId = await this.resolveSchoolId(schoolId);
+
+    // Validate student
+    let student = await this.prisma.student.findUnique({
+      where: { id: data.studentId },
+    });
+    if (!student) {
+      student = await this.prisma.student.findFirst({
+        where: {
+          OR: [{ schoolId: resolvedId }, { schoolId }],
+        },
+      });
+    }
+    if (!student) {
+      throw new BadRequestException('Student record not found');
+    }
+
+    // Safely resolve parentId
+    let resolvedParentId: string | null = null;
+    if (data.parentId) {
+      const parent = await this.prisma.parentGuardian.findFirst({
+        where: {
+          OR: [
+            { id: data.parentId },
+            { userId: data.parentId },
+          ],
+        },
+      });
+      if (parent) {
+        resolvedParentId = parent.id;
+      }
+    }
+
+    if (!resolvedParentId && student.parentId) {
+      resolvedParentId = student.parentId;
+    }
+
+    return this.prisma.studentLeaveApplication.create({
+      data: {
+        schoolId: resolvedId,
+        studentId: student.id,
+        parentId: resolvedParentId,
+        leaveType: data.leaveType || 'CASUAL',
+        startDate: new Date(data.startDate),
+        endDate: new Date(data.endDate),
+        reason: data.reason,
+        status: 'PENDING',
+      },
+      include: {
+        student: { include: { gradeClass: true, section: true } },
+      },
+    });
+  }
+
+  async getStudentLeaves(schoolId: string, params: {
+    studentId?: string;
+    classId?: string;
+    sectionId?: string;
+    status?: string;
+  }) {
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const where: any = {
+      OR: [{ schoolId: resolvedId }, { schoolId }],
+    };
+
+    if (params.studentId) where.studentId = params.studentId;
+    if (params.status && params.status !== 'ALL') where.status = params.status;
+    if (params.classId || params.sectionId) {
+      where.student = {
+        ...(params.classId && { classId: params.classId }),
+        ...(params.sectionId && { sectionId: params.sectionId }),
+      };
+    }
+
+    return this.prisma.studentLeaveApplication.findMany({
+      where,
+      include: {
+        student: { include: { gradeClass: true, section: true } },
+        parent: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async decideStudentLeave(
+    schoolId: string,
+    leaveId: string,
+    decision: 'APPROVED' | 'REJECTED',
+    reviewerName: string,
+    reviewNote?: string,
+  ) {
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const leave = await this.prisma.studentLeaveApplication.findUnique({
+      where: { id: leaveId },
+      include: { student: true },
+    });
+
+    if (!leave) throw new BadRequestException('Leave application not found');
+
+    const updated = await this.prisma.studentLeaveApplication.update({
+      where: { id: leaveId },
+      data: {
+        status: decision,
+        reviewedBy: reviewerName || 'Class Teacher',
+        reviewNote: reviewNote || (decision === 'APPROVED' ? 'Approved by Class Teacher' : 'Leave request declined'),
+      },
+      include: {
+        student: { include: { gradeClass: true, section: true } },
+        parent: true,
+      },
+    });
+
+    // If APPROVED, auto-reflect as LEAVE in the attendance register for those dates!
+    if (decision === 'APPROVED' && leave.student.sectionId) {
+      const start = new Date(leave.startDate);
+      const end = new Date(leave.endDate);
+
+      // Iterate through each date
+      for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+        if (d.getDay() === 0) continue; // Skip Sunday
+
+        const targetDate = new Date(d);
+        targetDate.setHours(0, 0, 0, 0);
+
+        // Find or create session
+        let session = await this.prisma.attendanceSession.findUnique({
+          where: {
+            schoolId_sectionId_date: {
+              schoolId: resolvedId,
+              sectionId: leave.student.sectionId,
+              date: targetDate,
+            },
+          },
+        });
+
+        if (!session) {
+          session = await this.prisma.attendanceSession.create({
+            data: {
+              schoolId: resolvedId,
+              sectionId: leave.student.sectionId,
+              date: targetDate,
+            },
+          });
+        }
+
+        // Upsert student attendance record as LEAVE
+        const existingRecord = await this.prisma.studentAttendance.findFirst({
+          where: { sessionId: session.id, studentId: leave.studentId },
+        });
+
+        if (existingRecord) {
+          await this.prisma.studentAttendance.update({
+            where: { id: existingRecord.id },
+            data: {
+              status: AttendanceStatus.LEAVE,
+              remarks: `Approved Leave: ${leave.reason}`,
+            },
+          });
+        } else {
+          await this.prisma.studentAttendance.create({
+            data: {
+              schoolId: resolvedId,
+              sessionId: session.id,
+              studentId: leave.studentId,
+              status: AttendanceStatus.LEAVE,
+              remarks: `Approved Leave: ${leave.reason}`,
+            },
+          });
+        }
+      }
+    }
+
+    return updated;
+  }
+
+  async getStudentAttendance(schoolId: string, studentId: string) {
+    const records = await this.prisma.studentAttendance.findMany({
+      where: { studentId },
+      include: {
+        session: true,
+      },
+      orderBy: {
+        session: {
+          date: 'desc',
+        },
+      },
+      take: 60,
+    });
+
+    return records.map((r) => ({
+      id: r.id,
+      studentId: r.studentId,
+      status: r.status,
+      remarks: r.remarks,
+      attendanceDate: r.session?.date || new Date().toISOString(),
+    }));
+  }
 }
+
 

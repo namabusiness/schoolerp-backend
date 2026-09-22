@@ -122,7 +122,6 @@ export class TransportController {
     return this.transportService.unassignStudent(schoolId, studentId);
   }
 
-  // Trips
   @Get('trips')
   async getTripLogs(@Tenant() schoolId: string) {
     return this.transportService.getTripLogs(schoolId);
@@ -132,4 +131,14 @@ export class TransportController {
   async logTrip(@Tenant() schoolId: string, @Body() body: any) {
     return this.transportService.logTrip(schoolId, body);
   }
+
+  // Isolated student transport for parent tracking
+  @Get('student/:studentId')
+  async getStudentTransport(
+    @Tenant() schoolId: string,
+    @Param('studentId') studentId: string,
+  ) {
+    return this.transportService.getStudentTransport(schoolId, studentId);
+  }
 }
+

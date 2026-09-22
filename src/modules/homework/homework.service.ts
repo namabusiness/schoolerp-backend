@@ -52,7 +52,36 @@ export class HomeworkService {
     });
   }
 
+  async getSubmissions(schoolId: string, homeworkId: string) {
+    return this.prisma.homeworkSubmission.findMany({
+      where: { homeworkId, schoolId },
+      include: {
+        student: {
+          include: { gradeClass: true, section: true },
+        },
+      },
+      orderBy: { submittedAt: 'desc' },
+    });
+  }
+
   async submitHomework(schoolId: string, homeworkId: string, data: any) {
+    const existing = await this.prisma.homeworkSubmission.findFirst({
+      where: { schoolId, homeworkId, studentId: data.studentId },
+    });
+
+    if (existing) {
+      return this.prisma.homeworkSubmission.update({
+        where: { id: existing.id },
+        data: {
+          submissionText: data.submissionText,
+          attachmentUrl: data.attachmentUrl,
+          submittedByRole: data.submittedByRole || 'STUDENT',
+          submittedAt: new Date(),
+          status: 'PENDING',
+        },
+      });
+    }
+
     return this.prisma.homeworkSubmission.create({
       data: {
         schoolId,
@@ -60,19 +89,26 @@ export class HomeworkService {
         studentId: data.studentId,
         submissionText: data.submissionText,
         attachmentUrl: data.attachmentUrl,
+        submittedByRole: data.submittedByRole || 'STUDENT',
         status: 'PENDING',
       },
     });
   }
 
-  async gradeSubmission(schoolId: string, submissionId: string, data: { grade: string; feedback: string }) {
+  async gradeSubmission(
+    schoolId: string,
+    submissionId: string,
+    data: { grade: string; feedback: string; allowResubmit?: boolean },
+  ) {
     return this.prisma.homeworkSubmission.update({
       where: { id: submissionId, schoolId },
       data: {
         grade: data.grade,
         feedback: data.feedback,
-        status: 'REVIEWED',
+        allowResubmit: !!data.allowResubmit,
+        status: data.allowResubmit ? 'RESUBMISSION_ALLOWED' : 'REVIEWED',
       },
     });
   }
 }
+

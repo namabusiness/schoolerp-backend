@@ -202,4 +202,37 @@ export class AcademicsController {
   ) {
     return this.academicsService.deleteClassTimetable(schoolId, classId, sectionId);
   }
+
+  // -------------------------------------------------------------
+  // LESSON PLANS & SYLLABUS PROGRESS
+  // -------------------------------------------------------------
+  @Get('lesson-plans')
+  async getLessonPlans(
+    @Tenant() schoolId: string,
+    @Query('classId') classId?: string,
+    @Query('subjectId') subjectId?: string,
+    @Query('teacherId') teacherId?: string,
+  ) {
+    return this.academicsService.getLessonPlans(schoolId, { classId, subjectId, teacherId });
+  }
+
+  @Post('lesson-plans')
+  async createLessonPlan(@Tenant() schoolId: string, @Body() body: any) {
+    return this.academicsService.createLessonPlan(schoolId, body);
+  }
+
+  @Patch('lesson-plans/:id')
+  async updateLessonPlan(
+    @Tenant() schoolId: string,
+    @Param('id') id: string,
+    @Body() body: any,
+  ) {
+    return this.academicsService.updateLessonPlan(schoolId, id, body);
+  }
+
+  @Delete('lesson-plans/:id')
+  async deleteLessonPlan(@Tenant() schoolId: string, @Param('id') id: string) {
+    return this.academicsService.deleteLessonPlan(schoolId, id);
+  }
 }
+
