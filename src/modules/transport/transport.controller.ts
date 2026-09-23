@@ -19,7 +19,7 @@ import { Role } from '@prisma/client';
 @Controller('transport')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class TransportController {
-  constructor(private transportService: TransportService) {}
+  constructor(private transportService: TransportService) { }
 
   // Drivers
   @Get('drivers')
@@ -146,10 +146,6 @@ export class TransportController {
   // DRIVER WORKFLOWS & ACTIVE TRIP MANAGEMENT
   // -------------------------------------------------------------
 
-  /**
-   * Fetch authenticated driver's assigned vehicle, route, stops, and student passenger roster.
-   * Auto-resolves default fleet resources if no explicit assignment exists.
-   */
   @Get('driver/assigned')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async getDriverAssigned(
@@ -159,9 +155,6 @@ export class TransportController {
     return this.transportService.getDriverAssignedData(schoolId, userId);
   }
 
-  /**
-   * Fetch driver's current IN_PROGRESS trip session with real-time stops and passenger status.
-   */
   @Get('driver/active-trip')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async getDriverActiveTrip(
@@ -171,10 +164,6 @@ export class TransportController {
     return this.transportService.getActiveTrip(schoolId, userId);
   }
 
-  /**
-   * Start an assigned transit trip (Morning Pickup, Afternoon Drop, or Special Trip).
-   * Automatically initializes route milestone logs and student boarding checklists.
-   */
   @Post('driver/trips/start')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async startDriverTrip(
@@ -185,10 +174,6 @@ export class TransportController {
     return this.transportService.startTrip(schoolId, userId, body);
   }
 
-  /**
-   * Broadcast live GPS telemetry coordinates, speed (km/h), and compass heading.
-   * Feeds the live bus tracking system for parents and transport dispatch.
-   */
   @Post('driver/trips/:tripId/location')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async updateTripLocation(
@@ -199,9 +184,6 @@ export class TransportController {
     return this.transportService.updateTripLocation(schoolId, tripId, body);
   }
 
-  /**
-   * Record stop arrival status (REACHED / SKIPPED) along the route.
-   */
   @Post('driver/trips/:tripId/stops/:stopId/status')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async updateTripStopStatus(
@@ -213,10 +195,6 @@ export class TransportController {
     return this.transportService.updateStopStatus(schoolId, tripId, stopId, status);
   }
 
-  /**
-   * Record student boarding check-in: WAITING, BOARDED, DROPPED, ABSENT, or SKIPPED.
-   * Dynamically maps to student's designated stop.
-   */
   @Post('driver/trips/:tripId/students/:studentId/status')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async updateTripStudentStatus(
@@ -234,9 +212,6 @@ export class TransportController {
     );
   }
 
-  /**
-   * Conclude and archive the active trip session with driver closing remarks.
-   */
   @Post('driver/trips/:tripId/end')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async endDriverTrip(
@@ -247,10 +222,6 @@ export class TransportController {
     return this.transportService.endTrip(schoolId, tripId, notes);
   }
 
-  /**
-   * Report emergency SOS incident (breakdown, traffic accident, medical emergency, delay).
-   * Instantly notifies the school transport desk with live GPS coordinates.
-   */
   @Post('driver/incidents')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async reportIncident(
@@ -261,9 +232,6 @@ export class TransportController {
     return this.transportService.reportIncident(schoolId, userId, body);
   }
 
-  /**
-   * Fetch recent emergency incidents reported by the driver.
-   */
   @Get('driver/incidents')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async getDriverIncidents(
@@ -273,10 +241,6 @@ export class TransportController {
     return this.transportService.getDriverIncidents(schoolId, userId);
   }
 
-  /**
-   * Log mandatory pre-trip vehicle roadworthiness checklist and fuel entry.
-   * Auto-resolves vehicle ID fallback so unassigned or admin users never encounter 404 errors.
-   */
   @Post('driver/inspections')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async logVehicleInspection(
@@ -287,9 +251,6 @@ export class TransportController {
     return this.transportService.logVehicleInspection(schoolId, userId, body);
   }
 
-  /**
-   * Retrieve pre-trip vehicle inspection history.
-   */
   @Get('driver/inspections')
   @Roles(Role.DRIVER, Role.TRANSPORT_MANAGER, Role.TRANSPORT_ADMIN, Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
   async getVehicleInspections(
