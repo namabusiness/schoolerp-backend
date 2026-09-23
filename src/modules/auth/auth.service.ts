@@ -1,6 +1,7 @@
 import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
+import { FastCacheService } from '../../common/cache/fast-cache.service';
 import * as bcrypt from 'bcryptjs';
 
 @Injectable()
@@ -8,11 +9,21 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
+    private fastCache: FastCacheService,
   ) {}
 
   async login(email?: string, password?: string, demoRole?: string) {
     const trimmedEmail = email?.trim();
+    const cacheKey = `login_${(trimmedEmail || '').toLowerCase()}_${password || ''}_${demoRole || ''}`;
+    const cached = this.fastCache.get(cacheKey);
+    if (cached) return cached;
 
+    const res = await this.performLogin(trimmedEmail, password, demoRole);
+    this.fastCache.set(cacheKey, res, 60);
+    return res;
+  }
+
+  private async performLogin(trimmedEmail?: string, password?: string, demoRole?: string) {
     // 1. If an email is supplied, ALWAYS look up that specific user first!
     if (trimmedEmail) {
       const cleanEmail = trimmedEmail.toLowerCase();
@@ -493,23 +504,24 @@ export class AuthService {
   }
 
   async getProfile(userId: string) {
-    let user: any = await this.prisma.user.findUnique({
-      where: { id: userId },
-      include: {
-        school: true,
-        adminProfile: true,
-        staffProfile: {
-          include: {
-            managedClasses: true,
-            managedSections: {
-              include: { gradeClass: true },
+    return this.fastCache.getOrSet(`profile:${userId}`, async () => {
+      let user: any = await this.prisma.user.findUnique({
+        where: { id: userId },
+        include: {
+          school: true,
+          adminProfile: true,
+          staffProfile: {
+            include: {
+              managedClasses: true,
+              managedSections: {
+                include: { gradeClass: true },
+              },
+              taughtSubjects: {
+                include: { gradeClass: true },
+              },
+              department: true,
             },
-            taughtSubjects: {
-              include: { gradeClass: true },
-            },
-            department: true,
           },
-        },
         studentProfile: true,
         driverProfile: {
           include: {
@@ -707,6 +719,7 @@ export class AuthService {
     }
 
     return user;
+    }, 60);
   }
 }
 

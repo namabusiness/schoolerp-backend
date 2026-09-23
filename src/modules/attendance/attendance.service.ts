@@ -1,10 +1,18 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { FastCacheService } from '../../common/cache/fast-cache.service';
 import { AttendanceStatus } from '@prisma/client';
 
 @Injectable()
 export class AttendanceService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private fastCache: FastCacheService,
+  ) {}
+
+  public clearAttendanceCache(schoolId?: string) {
+    this.fastCache.delByPrefix('attendance:');
+  }
 
   // Get or initialize session for a date
   async getSession(schoolId: string, sectionId: string, dateStr: string) {
@@ -99,6 +107,7 @@ export class AttendanceService {
       }
     });
 
+    this.clearAttendanceCache(schoolId);
     return this.prisma.attendanceSession.findUnique({
       where: { id: sessionId },
       include: { records: { include: { student: true } } },
@@ -138,109 +147,114 @@ export class AttendanceService {
 
   private async resolveSchoolId(schoolId: string): Promise<string> {
     if (!schoolId) return 'school-greenwood-high';
-    const byId = await this.prisma.school.findUnique({ where: { id: schoolId } });
-    if (byId) return byId.id;
+    return this.fastCache.getOrSet(`school_id:${schoolId}`, async () => {
+      const byId = await this.prisma.school.findUnique({ where: { id: schoolId } });
+      if (byId) return byId.id;
 
-    const bySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
-    if (bySlug) return bySlug.id;
+      const bySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
+      if (bySlug) return bySlug.id;
 
-    const byPrefix = await this.prisma.school.findUnique({ where: { id: `school-${schoolId}` } });
-    if (byPrefix) return byPrefix.id;
+      const byPrefix = await this.prisma.school.findUnique({ where: { id: `school-${schoolId}` } });
+      if (byPrefix) return byPrefix.id;
 
-    const fallback = await this.prisma.school.findFirst();
-    return fallback?.id || 'school-greenwood-high';
+      const fallback = await this.prisma.school.findFirst();
+      return fallback?.id || 'school-greenwood-high';
+    }, 3600);
   }
 
   // Monthly Matrix for Excel / Sheet Export
   async getMonthlyMatrix(schoolId: string, sectionId: string, year: number, month: number) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0, 23, 59, 59);
-    const daysInMonth = endDate.getDate();
+    const cacheKey = `attendance:matrix:${resolvedId}:${sectionId}:${year}:${month}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const startDate = new Date(year, month - 1, 1);
+      const endDate = new Date(year, month, 0, 23, 59, 59);
+      const daysInMonth = endDate.getDate();
 
-    const section = await this.prisma.section.findUnique({
-      where: { id: sectionId },
-      include: { gradeClass: true },
-    });
+      const section = await this.prisma.section.findUnique({
+        where: { id: sectionId },
+        include: { gradeClass: true },
+      });
 
-    const students = await this.prisma.student.findMany({
-      where: {
-        OR: [{ schoolId: resolvedId }, { schoolId }],
-        sectionId,
-        status: 'ACTIVE',
-      },
-      orderBy: [{ rollNumber: 'asc' }, { firstName: 'asc' }],
-    });
-
-    const sessions = await this.prisma.attendanceSession.findMany({
-      where: {
-        OR: [{ schoolId: resolvedId }, { schoolId }],
-        sectionId,
-        date: {
-          gte: startDate,
-          lte: endDate,
+      const students = await this.prisma.student.findMany({
+        where: {
+          OR: [{ schoolId: resolvedId }, { schoolId }],
+          sectionId,
+          status: 'ACTIVE',
         },
-      },
-      include: {
-        records: true,
-      },
-      orderBy: { date: 'asc' },
-    });
+        orderBy: [{ rollNumber: 'asc' }, { firstName: 'asc' }],
+      });
 
-    const studentRows = students.map((student) => {
-      const dailyStatus: Record<number, string> = {};
-      let presentCount = 0;
-      let absentCount = 0;
-      let lateCount = 0;
-      let leaveCount = 0;
-      let halfDayCount = 0;
+      const sessions = await this.prisma.attendanceSession.findMany({
+        where: {
+          OR: [{ schoolId: resolvedId }, { schoolId }],
+          sectionId,
+          date: {
+            gte: startDate,
+            lte: endDate,
+          },
+        },
+        include: {
+          records: true,
+        },
+        orderBy: { date: 'asc' },
+      });
 
-      for (let day = 1; day <= daysInMonth; day++) {
-        const session = sessions.find((s) => new Date(s.date).getDate() === day);
-        if (session) {
-          const record = session.records.find((r) => r.studentId === student.id);
-          const status = record ? record.status : 'NOT_MARKED';
-          dailyStatus[day] = status;
-          if (status === 'PRESENT') presentCount++;
-          else if (status === 'ABSENT') absentCount++;
-          else if (status === 'LATE') lateCount++;
-          else if (status === 'LEAVE') leaveCount++;
-          else if (status === 'HALF_DAY') halfDayCount++;
-        } else {
-          const curDate = new Date(year, month - 1, day);
-          dailyStatus[day] = curDate.getDay() === 0 ? 'HOLIDAY' : '-';
+      const studentRows = students.map((student) => {
+        const dailyStatus: Record<number, string> = {};
+        let presentCount = 0;
+        let absentCount = 0;
+        let lateCount = 0;
+        let leaveCount = 0;
+        let halfDayCount = 0;
+
+        for (let day = 1; day <= daysInMonth; day++) {
+          const session = sessions.find((s) => new Date(s.date).getDate() === day);
+          if (session) {
+            const record = session.records.find((r) => r.studentId === student.id);
+            const status = record ? record.status : 'NOT_MARKED';
+            dailyStatus[day] = status;
+            if (status === 'PRESENT') presentCount++;
+            else if (status === 'ABSENT') absentCount++;
+            else if (status === 'LATE') lateCount++;
+            else if (status === 'LEAVE') leaveCount++;
+            else if (status === 'HALF_DAY') halfDayCount++;
+          } else {
+            const curDate = new Date(year, month - 1, day);
+            dailyStatus[day] = curDate.getDay() === 0 ? 'HOLIDAY' : '-';
+          }
         }
-      }
 
-      const totalWorkingDays = sessions.length;
-      const rate = totalWorkingDays > 0 ? Math.round(((presentCount + (lateCount * 0.5) + (halfDayCount * 0.5)) / totalWorkingDays) * 100) : 100;
+        const totalWorkingDays = sessions.length;
+        const rate = totalWorkingDays > 0 ? Math.round(((presentCount + (lateCount * 0.5) + (halfDayCount * 0.5)) / totalWorkingDays) * 100) : 100;
+
+        return {
+          studentId: student.id,
+          admissionNumber: student.admissionNumber,
+          rollNumber: student.rollNumber || '-',
+          name: `${student.firstName} ${student.lastName}`.trim(),
+          gender: student.gender,
+          dailyStatus,
+          presentCount,
+          absentCount,
+          lateCount,
+          leaveCount,
+          halfDayCount,
+          totalWorkingDays,
+          attendanceRate: rate,
+        };
+      });
 
       return {
-        studentId: student.id,
-        admissionNumber: student.admissionNumber,
-        rollNumber: student.rollNumber || '-',
-        name: `${student.firstName} ${student.lastName}`.trim(),
-        gender: student.gender,
-        dailyStatus,
-        presentCount,
-        absentCount,
-        lateCount,
-        leaveCount,
-        halfDayCount,
-        totalWorkingDays,
-        attendanceRate: rate,
+        year,
+        month,
+        daysInMonth,
+        sectionName: section?.name || 'Section A',
+        className: section?.gradeClass?.name || 'Class',
+        totalWorkingDays: sessions.length,
+        students: studentRows,
       };
-    });
-
-    return {
-      year,
-      month,
-      daysInMonth,
-      sectionName: section?.name || 'Section A',
-      className: section?.gradeClass?.name || 'Class',
-      totalWorkingDays: sessions.length,
-      students: studentRows,
-    };
+    }, 60);
   }
 
   // -------------------------------------------------------------
@@ -292,7 +306,7 @@ export class AttendanceService {
       resolvedParentId = student.parentId;
     }
 
-    return this.prisma.studentLeaveApplication.create({
+    const res = await this.prisma.studentLeaveApplication.create({
       data: {
         schoolId: resolvedId,
         studentId: student.id,
@@ -307,6 +321,8 @@ export class AttendanceService {
         student: { include: { gradeClass: true, section: true } },
       },
     });
+    this.clearAttendanceCache(resolvedId);
+    return res;
   }
 
   async getStudentLeaves(schoolId: string, params: {
@@ -316,27 +332,30 @@ export class AttendanceService {
     status?: string;
   }) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    const where: any = {
-      OR: [{ schoolId: resolvedId }, { schoolId }],
-    };
-
-    if (params.studentId) where.studentId = params.studentId;
-    if (params.status && params.status !== 'ALL') where.status = params.status;
-    if (params.classId || params.sectionId) {
-      where.student = {
-        ...(params.classId && { classId: params.classId }),
-        ...(params.sectionId && { sectionId: params.sectionId }),
+    const cacheKey = `attendance:leaves:${resolvedId}:${params.studentId || ''}:${params.classId || ''}:${params.sectionId || ''}:${params.status || ''}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const where: any = {
+        OR: [{ schoolId: resolvedId }, { schoolId }],
       };
-    }
 
-    return this.prisma.studentLeaveApplication.findMany({
-      where,
-      include: {
-        student: { include: { gradeClass: true, section: true } },
-        parent: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    });
+      if (params.studentId) where.studentId = params.studentId;
+      if (params.status && params.status !== 'ALL') where.status = params.status;
+      if (params.classId || params.sectionId) {
+        where.student = {
+          ...(params.classId && { classId: params.classId }),
+          ...(params.sectionId && { sectionId: params.sectionId }),
+        };
+      }
+
+      return this.prisma.studentLeaveApplication.findMany({
+        where,
+        include: {
+          student: { include: { gradeClass: true, section: true } },
+          parent: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }, 30);
   }
 
   async decideStudentLeave(
@@ -427,30 +446,33 @@ export class AttendanceService {
       }
     }
 
+    this.clearAttendanceCache(resolvedId);
     return updated;
   }
 
   async getStudentAttendance(schoolId: string, studentId: string) {
-    const records = await this.prisma.studentAttendance.findMany({
-      where: { studentId },
-      include: {
-        session: true,
-      },
-      orderBy: {
-        session: {
-          date: 'desc',
+    return this.fastCache.getOrSet(`attendance:student:${studentId}`, async () => {
+      const records = await this.prisma.studentAttendance.findMany({
+        where: { studentId },
+        include: {
+          session: true,
         },
-      },
-      take: 60,
-    });
+        orderBy: {
+          session: {
+            date: 'desc',
+          },
+        },
+        take: 60,
+      });
 
-    return records.map((r) => ({
-      id: r.id,
-      studentId: r.studentId,
-      status: r.status,
-      remarks: r.remarks,
-      attendanceDate: r.session?.date || new Date().toISOString(),
-    }));
+      return records.map((r) => ({
+        id: r.id,
+        studentId: r.studentId,
+        status: r.status,
+        remarks: r.remarks,
+        attendanceDate: r.session?.date || new Date().toISOString(),
+      }));
+    }, 30);
   }
 }
 

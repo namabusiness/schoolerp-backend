@@ -1,38 +1,52 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { FastCacheService } from '../../common/cache/fast-cache.service';
 import { ApplicationStatus } from '@prisma/client';
 
 @Injectable()
 export class AdmissionsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private fastCache: FastCacheService,
+  ) {}
+
+  public clearAdmissionsCache(schoolId?: string) {
+    this.fastCache.delByPrefix('admissions:');
+  }
 
   public async resolveSchoolId(schoolId?: string): Promise<string> {
     if (!schoolId || schoolId === 'school-1') {
-      const defaultSchool = await this.prisma.school.findFirst();
-      return defaultSchool?.id || 'school-greenwood-high';
+      return this.fastCache.getOrSet('school_id:default', async () => {
+        const defaultSchool = await this.prisma.school.findFirst();
+        return defaultSchool?.id || 'school-greenwood-high';
+      }, 3600);
     }
-    const schoolById = await this.prisma.school.findUnique({ where: { id: schoolId } });
-    if (schoolById) return schoolById.id;
+    return this.fastCache.getOrSet(`school_id:${schoolId}`, async () => {
+      const schoolById = await this.prisma.school.findUnique({ where: { id: schoolId } });
+      if (schoolById) return schoolById.id;
 
-    const schoolBySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
-    if (schoolBySlug) return schoolBySlug.id;
+      const schoolBySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
+      if (schoolBySlug) return schoolBySlug.id;
 
-    const fallback = await this.prisma.school.findFirst();
-    return fallback?.id || 'school-greenwood-high';
+      const fallback = await this.prisma.school.findFirst();
+      return fallback?.id || 'school-greenwood-high';
+    }, 3600);
   }
 
   // Enquiries
   async getEnquiries(schoolId: string) {
     const resolvedSchoolId = await this.resolveSchoolId(schoolId);
-    return this.prisma.enquiry.findMany({
-      where: { schoolId: resolvedSchoolId },
-      orderBy: { createdAt: 'desc' },
-    });
+    return this.fastCache.getOrSet(`admissions:enquiries:${resolvedSchoolId}`, async () => {
+      return this.prisma.enquiry.findMany({
+        where: { schoolId: resolvedSchoolId },
+        orderBy: { createdAt: 'desc' },
+      });
+    }, 60);
   }
 
   async createEnquiry(schoolId: string, data: any) {
     const resolvedSchoolId = await this.resolveSchoolId(schoolId);
-    return this.prisma.enquiry.create({
+    const res = await this.prisma.enquiry.create({
       data: {
         schoolId: resolvedSchoolId,
         studentName: data.studentName,
@@ -44,34 +58,44 @@ export class AdmissionsService {
         notes: data.notes,
       },
     });
+    this.clearAdmissionsCache(resolvedSchoolId);
+    return res;
   }
 
   async updateEnquiryStatus(id: string, status: string, notes?: string) {
-    return this.prisma.enquiry.update({
+    const res = await this.prisma.enquiry.update({
       where: { id },
       data: { status, notes: notes || undefined },
     });
+    this.clearAdmissionsCache();
+    return res;
   }
 
   // Applications
   async getApplications(schoolId: string, status?: ApplicationStatus) {
     const resolvedSchoolId = await this.resolveSchoolId(schoolId);
-    const where: any = { schoolId: resolvedSchoolId };
-    if (status) where.status = status;
-    return this.prisma.admissionApplication.findMany({
-      where,
-      orderBy: { submittedAt: 'desc' },
-    });
+    const cacheKey = `admissions:apps:${resolvedSchoolId}:${status || 'ALL'}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const where: any = { schoolId: resolvedSchoolId };
+      if (status) where.status = status;
+      return this.prisma.admissionApplication.findMany({
+        where,
+        orderBy: { submittedAt: 'desc' },
+      });
+    }, 60);
   }
 
   async getApplicationById(id: string) {
-    const app = await this.prisma.admissionApplication.findUnique({ where: { id } });
-    if (!app) throw new NotFoundException('Application not found');
-    return app;
+    return this.fastCache.getOrSet(`admissions:app:${id}`, async () => {
+      const app = await this.prisma.admissionApplication.findUnique({ where: { id } });
+      if (!app) throw new NotFoundException('Application not found');
+      return app;
+    }, 60);
   }
 
   async submitApplication(schoolId: string, data: any) {
     const resolvedSchoolId = await this.resolveSchoolId(schoolId);
+    this.clearAdmissionsCache(resolvedSchoolId);
     const applicationNo = `APP-${new Date().getFullYear()}-${Date.now().toString().slice(-5)}`;
     
     // Normalize strings for JSON fields if passed as objects

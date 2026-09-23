@@ -1,70 +1,88 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { FastCacheService } from '../../common/cache/fast-cache.service';
 import { LeaveStatus, Role } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 @Injectable()
 export class StaffHrService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private fastCache: FastCacheService,
+  ) {}
+
+  public clearStaffCache(schoolId?: string) {
+    this.fastCache.delByPrefix('staff-hr:');
+  }
 
   private async resolveSchoolId(schoolId: string): Promise<string> {
     if (!schoolId) return 'school-greenwood-high';
-    const byId = await this.prisma.school.findUnique({ where: { id: schoolId } });
-    if (byId) return byId.id;
+    return this.fastCache.getOrSet(`school_id:${schoolId}`, async () => {
+      const byId = await this.prisma.school.findUnique({ where: { id: schoolId } });
+      if (byId) return byId.id;
 
-    const bySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
-    if (bySlug) return bySlug.id;
+      const bySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
+      if (bySlug) return bySlug.id;
 
-    const byPrefix = await this.prisma.school.findUnique({ where: { id: `school-${schoolId}` } });
-    if (byPrefix) return byPrefix.id;
+      const byPrefix = await this.prisma.school.findUnique({ where: { id: `school-${schoolId}` } });
+      if (byPrefix) return byPrefix.id;
 
-    const fallback = await this.prisma.school.findFirst();
-    return fallback?.id || 'school-greenwood-high';
+      const fallback = await this.prisma.school.findFirst();
+      return fallback?.id || 'school-greenwood-high';
+    }, 3600);
   }
 
   // Departments
   async getDepartments(schoolId: string) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    return this.prisma.department.findMany({
-      where: {
-        OR: [{ schoolId: resolvedId }, { schoolId }],
-      },
-      include: { _count: { select: { staff: true } } },
-    });
+    return this.fastCache.getOrSet(`staff-hr:departments:${resolvedId}`, async () => {
+      return this.prisma.department.findMany({
+        where: {
+          OR: [{ schoolId: resolvedId }, { schoolId }],
+        },
+        include: { _count: { select: { staff: true } } },
+      });
+    }, 60);
   }
 
   async createDepartment(schoolId: string, name: string) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    return this.prisma.department.create({
+    const res = await this.prisma.department.create({
       data: { schoolId: resolvedId, name },
     });
+    this.clearStaffCache(resolvedId);
+    return res;
   }
 
   // Staff & Faculty Profiles
   async getStaff(schoolId: string, departmentId?: string) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    const where: any = {
-      OR: [{ schoolId: resolvedId }, { schoolId }],
-    };
-    if (departmentId) where.departmentId = departmentId;
-    return this.prisma.staffProfile.findMany({
-      where,
-      include: {
-        department: true,
-        user: { select: { id: true, email: true, role: true, isActive: true } },
-        taughtSubjects: {
-          include: { gradeClass: true },
-          orderBy: { name: 'asc' },
+    const cacheKey = `staff-hr:staff:${resolvedId}:${departmentId || 'ALL'}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const where: any = {
+        OR: [{ schoolId: resolvedId }, { schoolId }],
+      };
+      if (departmentId) where.departmentId = departmentId;
+      return this.prisma.staffProfile.findMany({
+        where,
+        include: {
+          department: true,
+          user: { select: { id: true, email: true, role: true, isActive: true } },
+          taughtSubjects: {
+            include: { gradeClass: true },
+            orderBy: { name: 'asc' },
+          },
+          managedClasses: true,
+          managedSections: { include: { gradeClass: true } },
         },
-        managedClasses: true,
-        managedSections: { include: { gradeClass: true } },
-      },
-      orderBy: { name: 'asc' },
-    });
+        orderBy: { name: 'asc' },
+      });
+    }, 60);
   }
 
   async addStaff(schoolId: string, data: any) {
     const resolvedId = await this.resolveSchoolId(schoolId);
+    this.clearStaffCache(resolvedId);
     const employeeCode = data.employeeCode || `EMP-${Date.now().toString().slice(-5)}`;
 
     // Optional user login creation if requested
@@ -187,6 +205,7 @@ export class StaffHrService {
       }
     }
 
+    this.clearStaffCache(resolvedId);
     return createdStaff;
   }
 
@@ -238,7 +257,7 @@ export class StaffHrService {
       }
     }
 
-    return this.prisma.staffProfile.update({
+    const res = await this.prisma.staffProfile.update({
       where: { id },
       data: {
         name: data.name !== undefined ? data.name : undefined,
@@ -281,26 +300,33 @@ export class StaffHrService {
         managedSections: { include: { gradeClass: true } },
       },
     });
+    this.clearStaffCache(schoolId);
+    return res;
   }
 
   async deleteStaff(schoolId: string, id: string) {
-    return this.prisma.staffProfile.delete({
+    const res = await this.prisma.staffProfile.delete({
       where: { id },
     });
+    this.clearStaffCache(schoolId);
+    return res;
   }
 
   // Leaves
   async getLeaves(schoolId: string, status?: LeaveStatus) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    const where: any = {
-      OR: [{ schoolId: resolvedId }, { schoolId }],
-    };
-    if (status) where.status = status;
-    return this.prisma.leaveApplication.findMany({
-      where,
-      include: { staff: true },
-      orderBy: { startDate: 'desc' },
-    });
+    const cacheKey = `staff-hr:leaves:${resolvedId}:${status || 'ALL'}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const where: any = {
+        OR: [{ schoolId: resolvedId }, { schoolId }],
+      };
+      if (status) where.status = status;
+      return this.prisma.leaveApplication.findMany({
+        where,
+        include: { staff: true },
+        orderBy: { startDate: 'desc' },
+      });
+    }, 30);
   }
 
   async applyLeave(schoolId: string, data: any) {
@@ -333,7 +359,7 @@ export class StaffHrService {
       throw new BadRequestException('No valid staff profile found to submit leave application.');
     }
 
-    return this.prisma.leaveApplication.create({
+    const res = await this.prisma.leaveApplication.create({
       data: {
         schoolId: resolvedId,
         staffId: staff.id,
@@ -344,13 +370,17 @@ export class StaffHrService {
         status: LeaveStatus.PENDING,
       },
     });
+    this.clearStaffCache(resolvedId);
+    return res;
   }
 
   async updateLeaveStatus(schoolId: string, leaveId: string, status: LeaveStatus) {
-    return this.prisma.leaveApplication.update({
+    const res = await this.prisma.leaveApplication.update({
       where: { id: leaveId },
       data: { status },
     });
+    this.clearStaffCache(schoolId);
+    return res;
   }
 
   // Payroll & Payslips

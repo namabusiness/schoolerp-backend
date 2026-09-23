@@ -1,26 +1,38 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { FastCacheService } from '../../common/cache/fast-cache.service';
 
 @Injectable()
 export class AcademicsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private fastCache: FastCacheService,
+  ) {}
+
+  public clearAcademicsCache(schoolId?: string) {
+    this.fastCache.delByPrefix('academics:');
+  }
 
   public async resolveSchoolId(schoolId?: string): Promise<string> {
     if (!schoolId || schoolId === 'school-1') {
-      const defaultSchool = await this.prisma.school.findFirst();
-      return defaultSchool?.id || 'school-greenwood-high';
+      return this.fastCache.getOrSet('school_id:default', async () => {
+        const defaultSchool = await this.prisma.school.findFirst();
+        return defaultSchool?.id || 'school-greenwood-high';
+      }, 3600);
     }
-    const schoolById = await this.prisma.school.findUnique({ where: { id: schoolId } });
-    if (schoolById) return schoolById.id;
+    return this.fastCache.getOrSet(`school_id:${schoolId}`, async () => {
+      const schoolById = await this.prisma.school.findUnique({ where: { id: schoolId } });
+      if (schoolById) return schoolById.id;
 
-    const schoolBySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
-    if (schoolBySlug) return schoolBySlug.id;
+      const schoolBySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
+      if (schoolBySlug) return schoolBySlug.id;
 
-    const byPrefix = await this.prisma.school.findUnique({ where: { id: `school-${schoolId}` } });
-    if (byPrefix) return byPrefix.id;
+      const byPrefix = await this.prisma.school.findUnique({ where: { id: `school-${schoolId}` } });
+      if (byPrefix) return byPrefix.id;
 
-    const fallback = await this.prisma.school.findFirst();
-    return fallback?.id || 'school-greenwood-high';
+      const fallback = await this.prisma.school.findFirst();
+      return fallback?.id || 'school-greenwood-high';
+    }, 3600);
   }
 
   // -------------------------------------------------------------
@@ -28,13 +40,15 @@ export class AcademicsService {
   // -------------------------------------------------------------
   async getAcademicYears(schoolId: string) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    return this.prisma.academicYear.findMany({
-      where: {
-        OR: [{ schoolId: resolvedId }, { schoolId }],
-      },
-      include: { terms: true },
-      orderBy: { startDate: 'desc' },
-    });
+    return this.fastCache.getOrSet(`academics:years:${resolvedId}`, async () => {
+      return this.prisma.academicYear.findMany({
+        where: {
+          OR: [{ schoolId: resolvedId }, { schoolId }],
+        },
+        include: { terms: true },
+        orderBy: { startDate: 'desc' },
+      });
+    }, 60);
   }
 
   async createAcademicYear(
@@ -51,7 +65,7 @@ export class AcademicsService {
         data: { isCurrent: false },
       });
     }
-    return this.prisma.academicYear.create({
+    const result = await this.prisma.academicYear.create({
       data: {
         schoolId: resolvedId,
         name: data.name,
@@ -60,6 +74,8 @@ export class AcademicsService {
         isCurrent: data.isCurrent ?? true,
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return result;
   }
 
   // -------------------------------------------------------------
@@ -67,59 +83,61 @@ export class AcademicsService {
   // -------------------------------------------------------------
   async getClasses(schoolId: string) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    return this.prisma.gradeClass.findMany({
-      where: {
-        OR: [{ schoolId: resolvedId }, { schoolId }],
-      },
-      include: {
-        classTeacher: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
-            designation: true,
-            employeeCode: true,
-            photoUrl: true,
-          },
+    return this.fastCache.getOrSet(`academics:classes:${resolvedId}`, async () => {
+      return this.prisma.gradeClass.findMany({
+        where: {
+          OR: [{ schoolId: resolvedId }, { schoolId }],
         },
-        sections: {
-          include: {
-            classTeacher: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                phone: true,
-                designation: true,
-                employeeCode: true,
-                photoUrl: true,
-              },
-            },
-            _count: { select: { students: true } },
-          },
-          orderBy: { name: 'asc' },
-        },
-        subjects: {
-          include: {
-            teacher: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                phone: true,
-                designation: true,
-                employeeCode: true,
-                photoUrl: true,
-              },
+        include: {
+          classTeacher: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+              designation: true,
+              employeeCode: true,
+              photoUrl: true,
             },
           },
-          orderBy: { name: 'asc' },
+          sections: {
+            include: {
+              classTeacher: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  phone: true,
+                  designation: true,
+                  employeeCode: true,
+                  photoUrl: true,
+                },
+              },
+              _count: { select: { students: true } },
+            },
+            orderBy: { name: 'asc' },
+          },
+          subjects: {
+            include: {
+              teacher: {
+                select: {
+                  id: true,
+                  name: true,
+                  email: true,
+                  phone: true,
+                  designation: true,
+                  employeeCode: true,
+                  photoUrl: true,
+                },
+              },
+            },
+            orderBy: { name: 'asc' },
+          },
+          _count: { select: { students: true } },
         },
-        _count: { select: { students: true } },
-      },
-      orderBy: { name: 'asc' },
-    });
+        orderBy: { name: 'asc' },
+      });
+    }, 60);
   }
 
   async createClass(
@@ -194,7 +212,9 @@ export class AcademicsService {
 
     await this.prisma.section.deleteMany({ where: { classId } });
     await this.prisma.subject.deleteMany({ where: { classId } });
-    return this.prisma.gradeClass.delete({ where: { id: classId } });
+    const res = await this.prisma.gradeClass.delete({ where: { id: classId } });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   async createSection(
@@ -208,7 +228,7 @@ export class AcademicsService {
       await this.validateTeacherExclusivity(resolvedId, data.classTeacherId);
     }
 
-    return this.prisma.section.create({
+    const res = await this.prisma.section.create({
       data: {
         schoolId: resolvedId,
         classId,
@@ -221,6 +241,8 @@ export class AcademicsService {
         _count: { select: { students: true } },
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   async deleteSection(schoolId: string, sectionId: string) {
@@ -238,7 +260,9 @@ export class AcademicsService {
       );
     }
 
-    return this.prisma.section.delete({ where: { id: sectionId } });
+    const res = await this.prisma.section.delete({ where: { id: sectionId } });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   // -------------------------------------------------------------
@@ -289,7 +313,7 @@ export class AcademicsService {
       await this.validateTeacherExclusivity(resolvedId, teacherId, classId);
     }
 
-    return this.prisma.gradeClass.update({
+    const res = await this.prisma.gradeClass.update({
       where: { id: classId },
       data: { classTeacherId: teacherId && teacherId !== 'NONE' ? teacherId : null },
       include: {
@@ -297,6 +321,8 @@ export class AcademicsService {
         sections: { include: { classTeacher: true } },
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   async assignSectionTeacher(schoolId: string, sectionId: string, teacherId: string | null) {
@@ -306,7 +332,7 @@ export class AcademicsService {
       await this.validateTeacherExclusivity(resolvedId, teacherId, undefined, sectionId);
     }
 
-    return this.prisma.section.update({
+    const res = await this.prisma.section.update({
       where: { id: sectionId },
       data: { classTeacherId: teacherId && teacherId !== 'NONE' ? teacherId : null },
       include: {
@@ -314,6 +340,8 @@ export class AcademicsService {
         gradeClass: true,
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   // -------------------------------------------------------------
@@ -340,8 +368,8 @@ export class AcademicsService {
   }
 
   async unassignStudentFromClass(schoolId: string, studentId: string) {
-    await this.resolveSchoolId(schoolId);
-    return this.prisma.student.update({
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const res = await this.prisma.student.update({
       where: { id: studentId },
       data: {
         classId: null,
@@ -352,14 +380,16 @@ export class AcademicsService {
         parent: true,
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   async assignStudentToClass(
     schoolId: string,
     data: { studentId: string; classId: string; sectionId: string; rollNumber?: string },
   ) {
-    await this.resolveSchoolId(schoolId);
-    return this.prisma.student.update({
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const res = await this.prisma.student.update({
       where: { id: data.studentId },
       data: {
         classId: data.classId,
@@ -372,6 +402,8 @@ export class AcademicsService {
         parent: true,
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   // -------------------------------------------------------------
@@ -379,110 +411,113 @@ export class AcademicsService {
   // -------------------------------------------------------------
   async getClassStudents(schoolId: string, classId: string, sectionId?: string) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    const where: any = {
-      classId,
-      OR: [{ schoolId: resolvedId }, { schoolId }],
-    };
-    if (sectionId && sectionId !== 'ALL') {
-      where.sectionId = sectionId;
-    }
+    const cacheKey = `academics:class_students:${resolvedId}:${classId}:${sectionId || 'ALL'}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const where: any = {
+        classId,
+        OR: [{ schoolId: resolvedId }, { schoolId }],
+      };
+      if (sectionId && sectionId !== 'ALL') {
+        where.sectionId = sectionId;
+      }
 
-    const [classInfo, sectionInfo, students] = await Promise.all([
-      this.prisma.gradeClass.findUnique({
-        where: { id: classId },
-        include: {
-          classTeacher: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-              designation: true,
-              employeeCode: true,
-              qualification: true,
-              specialization: true,
-              photoUrl: true,
-            },
-          },
-          sections: {
-            include: {
-              classTeacher: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                  phone: true,
-                  designation: true,
-                  employeeCode: true,
-                  qualification: true,
-                  specialization: true,
-                  photoUrl: true,
-                },
-              },
-              _count: { select: { students: true } },
-            },
-            orderBy: { name: 'asc' },
-          },
-          subjects: {
-            include: {
-              teacher: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                  phone: true,
-                  designation: true,
-                  employeeCode: true,
-                  photoUrl: true,
-                },
+      const [classInfo, sectionInfo, students] = await Promise.all([
+        this.prisma.gradeClass.findUnique({
+          where: { id: classId },
+          include: {
+            classTeacher: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+                designation: true,
+                employeeCode: true,
+                qualification: true,
+                specialization: true,
+                photoUrl: true,
               },
             },
-            orderBy: { name: 'asc' },
-          },
-        },
-      }),
-      sectionId && sectionId !== 'ALL'
-        ? this.prisma.section.findUnique({
-            where: { id: sectionId },
-            include: {
-              classTeacher: {
-                select: {
-                  id: true,
-                  name: true,
-                  email: true,
-                  phone: true,
-                  designation: true,
-                  employeeCode: true,
-                  qualification: true,
-                  specialization: true,
-                  photoUrl: true,
+            sections: {
+              include: {
+                classTeacher: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    phone: true,
+                    designation: true,
+                    employeeCode: true,
+                    qualification: true,
+                    specialization: true,
+                    photoUrl: true,
+                  },
+                },
+                _count: { select: { students: true } },
+              },
+              orderBy: { name: 'asc' },
+            },
+            subjects: {
+              include: {
+                teacher: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    phone: true,
+                    designation: true,
+                    employeeCode: true,
+                    photoUrl: true,
+                  },
                 },
               },
+              orderBy: { name: 'asc' },
             },
-          })
-        : null,
-      this.prisma.student.findMany({
-        where,
-        include: {
-          gradeClass: true,
-          section: true,
-          parent: true,
-        },
-        orderBy: [{ rollNumber: 'asc' }, { firstName: 'asc' }],
-      }),
-    ]);
+          },
+        }),
+        sectionId && sectionId !== 'ALL'
+          ? this.prisma.section.findUnique({
+              where: { id: sectionId },
+              include: {
+                classTeacher: {
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    phone: true,
+                    designation: true,
+                    employeeCode: true,
+                    qualification: true,
+                    specialization: true,
+                    photoUrl: true,
+                  },
+                },
+              },
+            })
+          : null,
+        this.prisma.student.findMany({
+          where,
+          include: {
+            gradeClass: true,
+            section: true,
+            parent: true,
+          },
+          orderBy: [{ rollNumber: 'asc' }, { firstName: 'asc' }],
+        }),
+      ]);
 
-    // Active class teacher resolution:
-    const activeTeacher = sectionInfo?.classTeacher || classInfo?.classTeacher || null;
+      // Active class teacher resolution:
+      const activeTeacher = sectionInfo?.classTeacher || classInfo?.classTeacher || null;
 
-    return {
-      class: classInfo,
-      section: sectionInfo,
-      classTeacher: activeTeacher,
-      subjects: classInfo?.subjects || [],
-      students,
-      totalCount: students.length,
-    };
+      return {
+        class: classInfo,
+        section: sectionInfo,
+        classTeacher: activeTeacher,
+        subjects: classInfo?.subjects || [],
+        students,
+        totalCount: students.length,
+      };
+    }, 30);
   }
 
   // -------------------------------------------------------------
@@ -490,28 +525,30 @@ export class AcademicsService {
   // -------------------------------------------------------------
   async getSubjects(schoolId: string, classId?: string) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    const where: any = {
-      OR: [{ schoolId: resolvedId }, { schoolId }],
-    };
-    if (classId) where.classId = classId;
-    return this.prisma.subject.findMany({
-      where,
-      include: {
-        gradeClass: true,
-        teacher: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            phone: true,
-            designation: true,
-            employeeCode: true,
-            photoUrl: true,
+    return this.fastCache.getOrSet(`academics:subjects:${resolvedId}:${classId || 'all'}`, async () => {
+      const where: any = {
+        OR: [{ schoolId: resolvedId }, { schoolId }],
+      };
+      if (classId) where.classId = classId;
+      return this.prisma.subject.findMany({
+        where,
+        include: {
+          gradeClass: true,
+          teacher: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              phone: true,
+              designation: true,
+              employeeCode: true,
+              photoUrl: true,
+            },
           },
         },
-      },
-      orderBy: [{ gradeClass: { name: 'asc' } }, { name: 'asc' }],
-    });
+        orderBy: [{ gradeClass: { name: 'asc' } }, { name: 'asc' }],
+      });
+    }, 60);
   }
 
   async createSubject(
@@ -519,7 +556,7 @@ export class AcademicsService {
     data: { classId: string; name: string; code: string; teacherId?: string; periodsPerWeek?: number },
   ) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    return this.prisma.subject.create({
+    const res = await this.prisma.subject.create({
       data: {
         schoolId: resolvedId,
         classId: data.classId,
@@ -533,11 +570,13 @@ export class AcademicsService {
         gradeClass: true,
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   async assignSubjectTeacher(schoolId: string, subjectId: string, teacherId: string | null) {
-    await this.resolveSchoolId(schoolId);
-    return this.prisma.subject.update({
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const res = await this.prisma.subject.update({
       where: { id: subjectId },
       data: { teacherId: teacherId && teacherId !== 'NONE' ? teacherId : null },
       include: {
@@ -545,11 +584,15 @@ export class AcademicsService {
         gradeClass: true,
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   async deleteSubject(schoolId: string, subjectId: string) {
-    await this.resolveSchoolId(schoolId);
-    return this.prisma.subject.delete({ where: { id: subjectId } });
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const res = await this.prisma.subject.delete({ where: { id: subjectId } });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   // -------------------------------------------------------------
@@ -560,73 +603,76 @@ export class AcademicsService {
     params: { classId?: string; sectionId?: string; teacherId?: string; status?: string },
   ) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    const where: any = {
-      OR: [{ schoolId: resolvedId }, { schoolId }],
-    };
-    if (params.classId) where.classId = params.classId;
-    if (params.sectionId && params.sectionId !== 'ALL') where.sectionId = params.sectionId;
-    if (params.teacherId) where.teacherId = params.teacherId;
-    if (params.status) where.status = params.status;
+    const cacheKey = `academics:timetable:${resolvedId}:${params.classId || ''}:${params.sectionId || ''}:${params.teacherId || ''}:${params.status || ''}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const where: any = {
+        OR: [{ schoolId: resolvedId }, { schoolId }],
+      };
+      if (params.classId) where.classId = params.classId;
+      if (params.sectionId && params.sectionId !== 'ALL') where.sectionId = params.sectionId;
+      if (params.teacherId) where.teacherId = params.teacherId;
+      if (params.status) where.status = params.status;
 
-    const [slots, periods, classInfo, sectionInfo] = await Promise.all([
-      this.prisma.timetableSlot.findMany({
-        where,
-        include: {
-          subject: true,
-          teacher: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true,
-              designation: true,
-              employeeCode: true,
-              photoUrl: true,
-            },
-          },
-          period: true,
-          section: {
-            include: {
-              gradeClass: true,
-            },
-          },
-        },
-        orderBy: [{ dayOfWeek: 'asc' }, { period: { periodNumber: 'asc' } }],
-      }),
-      this.prisma.period.findMany({
-        where: {
-          OR: [{ schoolId: resolvedId }, { schoolId }],
-        },
-        orderBy: { periodNumber: 'asc' },
-      }),
-      params.classId
-        ? this.prisma.gradeClass.findUnique({
-            where: { id: params.classId },
-            include: {
-              sections: true,
-              subjects: {
-                include: { teacher: true },
+      const [slots, periods, classInfo, sectionInfo] = await Promise.all([
+        this.prisma.timetableSlot.findMany({
+          where,
+          include: {
+            subject: true,
+            teacher: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                phone: true,
+                designation: true,
+                employeeCode: true,
+                photoUrl: true,
               },
             },
-          })
-        : null,
-      params.sectionId && params.sectionId !== 'ALL'
-        ? this.prisma.section.findUnique({
-            where: { id: params.sectionId },
-            include: { classTeacher: true },
-          })
-        : null,
-    ]);
+            period: true,
+            section: {
+              include: {
+                gradeClass: true,
+              },
+            },
+          },
+          orderBy: [{ dayOfWeek: 'asc' }, { period: { periodNumber: 'asc' } }],
+        }),
+        this.prisma.period.findMany({
+          where: {
+            OR: [{ schoolId: resolvedId }, { schoolId }],
+          },
+          orderBy: { periodNumber: 'asc' },
+        }),
+        params.classId
+          ? this.prisma.gradeClass.findUnique({
+              where: { id: params.classId },
+              include: {
+                sections: true,
+                subjects: {
+                  include: { teacher: true },
+                },
+              },
+            })
+          : null,
+        params.sectionId && params.sectionId !== 'ALL'
+          ? this.prisma.section.findUnique({
+              where: { id: params.sectionId },
+              include: { classTeacher: true },
+            })
+          : null,
+      ]);
 
-    return {
-      slots,
-      periods,
-      class: classInfo,
-      section: sectionInfo,
-      totalSlots: slots.length,
-      approvedCount: slots.filter((s) => s.status === 'APPROVED').length,
-      draftCount: slots.filter((s) => s.status === 'DRAFT').length,
-    };
+      return {
+        slots,
+        periods,
+        class: classInfo,
+        section: sectionInfo,
+        totalSlots: slots.length,
+        approvedCount: slots.filter((s) => s.status === 'APPROVED').length,
+        draftCount: slots.filter((s) => s.status === 'DRAFT').length,
+      };
+    }, 30);
   }
 
   async generateTimetable(
@@ -1038,6 +1084,7 @@ export class AcademicsService {
       await this.prisma.timetableSlot.create({ data: slotData });
     }
 
+    this.clearAcademicsCache(resolvedId);
     return this.getTimetable(resolvedId, {
       classId: data.classId,
       sectionId: targetSectionId,
@@ -1059,6 +1106,7 @@ export class AcademicsService {
       data: { status: 'APPROVED' },
     });
 
+    this.clearAcademicsCache(resolvedId);
     return {
       message: 'Timetable approved and published successfully.',
       approvedCount: updated.count,
@@ -1067,51 +1115,53 @@ export class AcademicsService {
 
   async getFacultyTimetable(schoolId: string, teacherId: string) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    const [teacher, slots, periods] = await Promise.all([
-      this.prisma.staffProfile.findUnique({
-        where: { id: teacherId },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          phone: true,
-          designation: true,
-          employeeCode: true,
-          photoUrl: true,
-          qualification: true,
-          specialization: true,
-        },
-      }),
-      this.prisma.timetableSlot.findMany({
-        where: {
-          teacherId,
-          OR: [{ schoolId: resolvedId }, { schoolId }],
-        },
-        include: {
-          subject: true,
-          period: true,
-          section: {
-            include: {
-              gradeClass: true,
+    return this.fastCache.getOrSet(`academics:fac_timetable:${resolvedId}:${teacherId}`, async () => {
+      const [teacher, slots, periods] = await Promise.all([
+        this.prisma.staffProfile.findUnique({
+          where: { id: teacherId },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            designation: true,
+            employeeCode: true,
+            photoUrl: true,
+            qualification: true,
+            specialization: true,
+          },
+        }),
+        this.prisma.timetableSlot.findMany({
+          where: {
+            teacherId,
+            OR: [{ schoolId: resolvedId }, { schoolId }],
+          },
+          include: {
+            subject: true,
+            period: true,
+            section: {
+              include: {
+                gradeClass: true,
+              },
             },
           },
-        },
-        orderBy: [{ dayOfWeek: 'asc' }, { period: { periodNumber: 'asc' } }],
-      }),
-      this.prisma.period.findMany({
-        where: {
-          OR: [{ schoolId: resolvedId }, { schoolId }],
-        },
-        orderBy: { periodNumber: 'asc' },
-      }),
-    ]);
+          orderBy: [{ dayOfWeek: 'asc' }, { period: { periodNumber: 'asc' } }],
+        }),
+        this.prisma.period.findMany({
+          where: {
+            OR: [{ schoolId: resolvedId }, { schoolId }],
+          },
+          orderBy: { periodNumber: 'asc' },
+        }),
+      ]);
 
-    return {
-      teacher,
-      slots,
-      periods,
-      totalPeriodsPerWeek: slots.length,
-    };
+      return {
+        teacher,
+        slots,
+        periods,
+        totalPeriodsPerWeek: slots.length,
+      };
+    }, 30);
   }
 
   async updateTimetableSlot(
@@ -1153,7 +1203,7 @@ export class AcademicsService {
       }
     }
 
-    return this.prisma.timetableSlot.update({
+    const res = await this.prisma.timetableSlot.update({
       where: { id: slotId },
       data: {
         ...(data.subjectId ? { subjectId: data.subjectId } : {}),
@@ -1167,6 +1217,8 @@ export class AcademicsService {
         section: { include: { gradeClass: true } },
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   async deleteClassTimetable(schoolId: string, classId: string, sectionId?: string) {
@@ -1179,12 +1231,13 @@ export class AcademicsService {
       where.sectionId = sectionId;
     }
     const deleted = await this.prisma.timetableSlot.deleteMany({ where });
+    this.clearAcademicsCache(resolvedId);
     return { message: 'Timetable cleared', count: deleted.count };
   }
 
   async createTimetableSlot(schoolId: string, data: any) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    return this.prisma.timetableSlot.create({
+    const res = await this.prisma.timetableSlot.create({
       data: {
         schoolId: resolvedId,
         academicYearId: data.academicYearId || undefined,
@@ -1199,6 +1252,8 @@ export class AcademicsService {
         customNote: data.customNote || null,
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   // -------------------------------------------------------------
@@ -1206,29 +1261,32 @@ export class AcademicsService {
   // -------------------------------------------------------------
   async getLessonPlans(schoolId: string, params: { classId?: string; subjectId?: string; teacherId?: string }) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    const where: any = {
-      OR: [{ schoolId: resolvedId }, { schoolId }],
-    };
-    if (params.classId) where.classId = params.classId;
-    if (params.subjectId) where.subjectId = params.subjectId;
-    if (params.teacherId) where.teacherId = params.teacherId;
+    const cacheKey = `academics:lesson_plans:${resolvedId}:${params.classId || ''}:${params.subjectId || ''}:${params.teacherId || ''}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const where: any = {
+        OR: [{ schoolId: resolvedId }, { schoolId }],
+      };
+      if (params.classId) where.classId = params.classId;
+      if (params.subjectId) where.subjectId = params.subjectId;
+      if (params.teacherId) where.teacherId = params.teacherId;
 
-    return this.prisma.lessonPlan.findMany({
-      where,
-      include: {
-        gradeClass: true,
-        subject: true,
-        teacher: {
-          select: { id: true, name: true, employeeCode: true, email: true },
+      return this.prisma.lessonPlan.findMany({
+        where,
+        include: {
+          gradeClass: true,
+          subject: true,
+          teacher: {
+            select: { id: true, name: true, employeeCode: true, email: true },
+          },
         },
-      },
-      orderBy: [{ plannedDate: 'asc' }, { createdAt: 'desc' }],
-    });
+        orderBy: [{ plannedDate: 'asc' }, { createdAt: 'desc' }],
+      });
+    }, 30);
   }
 
   async createLessonPlan(schoolId: string, data: any) {
     const resolvedId = await this.resolveSchoolId(schoolId);
-    return this.prisma.lessonPlan.create({
+    const res = await this.prisma.lessonPlan.create({
       data: {
         schoolId: resolvedId,
         classId: data.classId,
@@ -1247,10 +1305,13 @@ export class AcademicsService {
         subject: true,
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   async updateLessonPlan(schoolId: string, id: string, data: any) {
-    return this.prisma.lessonPlan.update({
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const res = await this.prisma.lessonPlan.update({
       where: { id },
       data: {
         ...(data.title && { title: data.title }),
@@ -1262,10 +1323,15 @@ export class AcademicsService {
         ...(data.completedDate && { completedDate: new Date(data.completedDate) }),
       },
     });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 
   async deleteLessonPlan(schoolId: string, id: string) {
-    return this.prisma.lessonPlan.delete({ where: { id } });
+    const resolvedId = await this.resolveSchoolId(schoolId);
+    const res = await this.prisma.lessonPlan.delete({ where: { id } });
+    this.clearAcademicsCache(resolvedId);
+    return res;
   }
 }
 

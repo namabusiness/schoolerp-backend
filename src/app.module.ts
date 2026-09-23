@@ -6,6 +6,7 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { PrismaModule } from './prisma/prisma.module';
 import { StorageModule } from './common/storage/storage.module';
 import { RedisModule } from './common/redis/redis.module';
+import { FastCacheModule } from './common/cache/fast-cache.module';
 import { AuditLogInterceptor } from './common/interceptors/audit-log.interceptor';
 
 // Feature Modules
@@ -35,6 +36,7 @@ import { PromotionModule } from './modules/promotion/promotion.module';
     PrismaModule,
     StorageModule,
     RedisModule,
+    FastCacheModule,
     AuthModule,
     SuperAdminModule,
     AcademicsModule,

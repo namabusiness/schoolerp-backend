@@ -1,23 +1,35 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { FastCacheService } from '../../common/cache/fast-cache.service';
 
 @Injectable()
 export class StudentsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private fastCache: FastCacheService,
+  ) {}
+
+  public clearStudentsCache(schoolId?: string) {
+    this.fastCache.delByPrefix('students:');
+  }
 
   public async resolveSchoolId(schoolId?: string): Promise<string> {
     if (!schoolId || schoolId === 'school-1') {
-      const defaultSchool = await this.prisma.school.findFirst();
-      return defaultSchool?.id || 'school-greenwood-high';
+      return this.fastCache.getOrSet('school_id:default', async () => {
+        const defaultSchool = await this.prisma.school.findFirst();
+        return defaultSchool?.id || 'school-greenwood-high';
+      }, 3600);
     }
-    const schoolById = await this.prisma.school.findUnique({ where: { id: schoolId } });
-    if (schoolById) return schoolById.id;
+    return this.fastCache.getOrSet(`school_id:${schoolId}`, async () => {
+      const schoolById = await this.prisma.school.findUnique({ where: { id: schoolId } });
+      if (schoolById) return schoolById.id;
 
-    const schoolBySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
-    if (schoolBySlug) return schoolBySlug.id;
+      const schoolBySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
+      if (schoolBySlug) return schoolBySlug.id;
 
-    const fallback = await this.prisma.school.findFirst();
-    return fallback?.id || 'school-greenwood-high';
+      const fallback = await this.prisma.school.findFirst();
+      return fallback?.id || 'school-greenwood-high';
+    }, 3600);
   }
 
   async getStudents(
@@ -32,47 +44,51 @@ export class StudentsService {
     },
   ) {
     const resolvedSchoolId = await this.resolveSchoolId(schoolId);
-    const where: any = { schoolId: resolvedSchoolId };
-    if (params?.classId) where.classId = params.classId;
-    if (params?.sectionId) where.sectionId = params.sectionId;
-    if (params?.status) where.status = params.status;
-    if (params?.search) {
-      where.OR = [
-        { firstName: { contains: params.search, mode: 'insensitive' } },
-        { lastName: { contains: params.search, mode: 'insensitive' } },
-        { admissionNumber: { contains: params.search, mode: 'insensitive' } },
-        { rollNumber: { contains: params.search, mode: 'insensitive' } },
-      ];
-    }
+    const cacheKey = `students:list:${resolvedSchoolId}:${params?.classId || ''}:${params?.sectionId || ''}:${params?.search || ''}:${params?.status || ''}:${params?.page || 1}:${params?.limit || 50}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const where: any = { schoolId: resolvedSchoolId };
+      if (params?.classId) where.classId = params.classId;
+      if (params?.sectionId) where.sectionId = params.sectionId;
+      if (params?.status) where.status = params.status;
+      if (params?.search) {
+        where.OR = [
+          { firstName: { contains: params.search, mode: 'insensitive' } },
+          { lastName: { contains: params.search, mode: 'insensitive' } },
+          { admissionNumber: { contains: params.search, mode: 'insensitive' } },
+          { rollNumber: { contains: params.search, mode: 'insensitive' } },
+        ];
+      }
 
-    const page = Number(params?.page) || 1;
-    const limit = Number(params?.limit) || 50;
+      const page = Number(params?.page) || 1;
+      const limit = Number(params?.limit) || 50;
 
-    const [students, total] = await Promise.all([
-      this.prisma.student.findMany({
-        where,
-        include: {
-          gradeClass: true,
-          section: true,
-          parent: true,
-          documents: true,
-        },
-        orderBy: [{ classId: 'asc' }, { rollNumber: 'asc' }],
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      this.prisma.student.count({ where }),
-    ]);
+      const [students, total] = await Promise.all([
+        this.prisma.student.findMany({
+          where,
+          include: {
+            gradeClass: true,
+            section: true,
+            parent: true,
+            documents: true,
+          },
+          orderBy: [{ classId: 'asc' }, { rollNumber: 'asc' }],
+          skip: (page - 1) * limit,
+          take: limit,
+        }),
+        this.prisma.student.count({ where }),
+      ]);
 
-    return { students, total, page, limit };
+      return { students, total, page, limit };
+    }, 60);
   }
 
   // Complete 360-degree central student connection
   async getStudent360(schoolId: string, studentId: string) {
     const resolvedSchoolId = await this.resolveSchoolId(schoolId);
-    const student = await this.prisma.student.findFirst({
-      where: { id: studentId, schoolId: resolvedSchoolId },
-      include: {
+    return this.fastCache.getOrSet(`students:360:${resolvedSchoolId}:${studentId}`, async () => {
+      const student = await this.prisma.student.findFirst({
+        where: { id: studentId, schoolId: resolvedSchoolId },
+        include: {
         gradeClass: true,
         section: true,
         academicYear: true,
@@ -215,11 +231,13 @@ export class StudentsService {
         issuedCertificates: student.certificates.length,
       },
     };
+    }, 60);
   }
 
   async updateStudent(schoolId: string, studentId: string, data: any) {
-    return this.prisma.student.update({
-      where: { id: studentId, schoolId },
+    const resolvedSchoolId = await this.resolveSchoolId(schoolId);
+    const res = await this.prisma.student.update({
+      where: { id: studentId, schoolId: resolvedSchoolId },
       data: {
         rollNumber: data.rollNumber,
         firstName: data.firstName,
@@ -231,6 +249,8 @@ export class StudentsService {
         status: data.status,
       },
     });
+    this.clearStudentsCache(resolvedSchoolId);
+    return res;
   }
 
   async uploadStudentDocument(
@@ -324,6 +344,7 @@ export class StudentsService {
       console.warn('Sync document to application error:', e);
     }
 
+    this.clearStudentsCache(resolvedSchoolId);
     return doc;
   }
 }

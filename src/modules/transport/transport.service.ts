@@ -1,23 +1,29 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { FastCacheService } from '../../common/cache/fast-cache.service';
 
 @Injectable()
 export class TransportService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private fastCache: FastCacheService,
+  ) {}
 
   private async resolveSchoolId(schoolId: string): Promise<string> {
     if (!schoolId) return 'school-greenwood-high';
-    const byId = await this.prisma.school.findUnique({ where: { id: schoolId } });
-    if (byId) return byId.id;
+    return this.fastCache.getOrSet(`school_id:${schoolId}`, async () => {
+      const byId = await this.prisma.school.findUnique({ where: { id: schoolId } });
+      if (byId) return byId.id;
 
-    const bySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
-    if (bySlug) return bySlug.id;
+      const bySlug = await this.prisma.school.findUnique({ where: { slug: schoolId } });
+      if (bySlug) return bySlug.id;
 
-    const byPrefix = await this.prisma.school.findUnique({ where: { id: `school-${schoolId}` } });
-    if (byPrefix) return byPrefix.id;
+      const byPrefix = await this.prisma.school.findUnique({ where: { id: `school-${schoolId}` } });
+      if (byPrefix) return byPrefix.id;
 
-    const fallback = await this.prisma.school.findFirst();
-    return fallback?.id || 'school-greenwood-high';
+      const fallback = await this.prisma.school.findFirst();
+      return fallback?.id || 'school-greenwood-high';
+    }, 3600);
   }
 
   // -------------------------------------------------------------
@@ -438,16 +444,18 @@ export class TransportService {
   // -------------------------------------------------------------
 
   async getDriverAssignedData(schoolId: string, userIdOrDriverId: string) {
-    const resolvedSchoolId = await this.resolveSchoolId(schoolId);
+    const cacheKey = `driver_assigned:${schoolId}:${userIdOrDriverId}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const resolvedSchoolId = await this.resolveSchoolId(schoolId);
 
-    let driver = await this.prisma.driver.findFirst({
-      where: {
-        OR: [
-          { id: userIdOrDriverId },
-          { userId: userIdOrDriverId },
-          { user: { email: userIdOrDriverId } },
-        ],
-      },
+      let driver = await this.prisma.driver.findFirst({
+        where: {
+          OR: [
+            { id: userIdOrDriverId },
+            { userId: userIdOrDriverId },
+            { user: { email: userIdOrDriverId } },
+          ],
+        },
       include: {
         vehicles: true,
         routes: {
@@ -662,45 +670,49 @@ export class TransportService {
         busCapacity: assignedVehicle?.capacity || 40,
       },
     };
+    }, 30);
   }
 
   async getActiveTrip(schoolId: string, userIdOrDriverId: string) {
-    const assigned = await this.getDriverAssignedData(schoolId, userIdOrDriverId);
-    const driverId = assigned.driver.id;
+    const cacheKey = `driver_active_trip:${schoolId}:${userIdOrDriverId}`;
+    return this.fastCache.getOrSet(cacheKey, async () => {
+      const assigned = await this.getDriverAssignedData(schoolId, userIdOrDriverId);
+      const driverId = assigned.driver.id;
 
-    const activeTrip = await this.prisma.tripLog.findFirst({
-      where: {
-        driverId,
-        status: 'IN_PROGRESS',
-      },
-      include: {
-        route: {
-          include: {
-            stops: { orderBy: { stopOrder: 'asc' } },
-            vehicle: true,
-          },
+      const activeTrip = await this.prisma.tripLog.findFirst({
+        where: {
+          driverId,
+          status: 'IN_PROGRESS',
         },
-        studentStatuses: {
-          include: {
-            student: {
-              include: { parent: true, gradeClass: true, section: true },
+        include: {
+          route: {
+            include: {
+              stops: { orderBy: { stopOrder: 'asc' } },
+              vehicle: true,
             },
-            stop: true,
+          },
+          studentStatuses: {
+            include: {
+              student: {
+                include: { parent: true, gradeClass: true, section: true },
+              },
+              stop: true,
+            },
+          },
+          stopLogs: {
+            include: { stop: true },
           },
         },
-        stopLogs: {
-          include: { stop: true },
-        },
-      },
-      orderBy: { startedAt: 'desc' },
-    });
+        orderBy: { startedAt: 'desc' },
+      });
 
-    if (!activeTrip) return null;
+      if (!activeTrip) return null;
 
-    return {
-      ...activeTrip,
-      driver: assigned.driver,
-    };
+      return {
+        ...activeTrip,
+        driver: assigned.driver,
+      };
+    }, 5);
   }
 
   async startTrip(
@@ -796,6 +808,9 @@ export class TransportService {
         skipDuplicates: true,
       });
     }
+
+    this.fastCache.delByPrefix(`driver_active_trip:${schoolId}`);
+    this.fastCache.delByPrefix(`driver_assigned:${schoolId}`);
 
     return this.getActiveTrip(schoolId, userIdOrDriverId);
   }
@@ -917,6 +932,9 @@ export class TransportService {
   }
 
   async endTrip(schoolId: string, tripId: string, notes?: string) {
+    this.fastCache.delByPrefix(`driver_active_trip:${schoolId}`);
+    this.fastCache.delByPrefix(`driver_assigned:${schoolId}`);
+
     const existing = await this.prisma.tripLog.findUnique({ where: { id: tripId } });
     if (!existing) {
       return { success: true, message: 'Trip already completed or not found.' };
