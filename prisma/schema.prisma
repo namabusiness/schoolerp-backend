@@ -454,6 +454,7 @@ model Student {
   transport       StudentTransportAssignment?
   leaveApplications StudentLeaveApplication[]
   parentMessages    ParentTeacherMessage[]
+  tripStatuses      TripStudentStatus[]
 }
 
 model StudentDocument {
@@ -700,6 +701,9 @@ model Driver {
   emergencyContact String?
   vehicles        Vehicle[]
   routes          Route[]
+  trips           TripLog[]
+  incidents       TransportIncident[]
+  inspections     VehicleInspectionLog[]
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 }
@@ -719,6 +723,8 @@ model Vehicle {
   fuelType        String?        @default("DIESEL") // DIESEL, PETROL, CNG, ELECTRIC
   status          String         @default("ACTIVE") // ACTIVE, MAINTENANCE
   routes          Route[]
+  trips           TripLog[]
+  inspections     VehicleInspectionLog[]
 }
 
 model Route {
@@ -753,6 +759,8 @@ model RouteStop {
   landmark        String?
   fare            Float?         @default(0)
   assignments     StudentTransportAssignment[]
+  stopLogs        TripStopLog[]
+  tripStudentStatuses TripStudentStatus[]
 }
 
 model StudentTransportAssignment {
@@ -771,9 +779,91 @@ model TripLog {
   schoolId        String
   routeId         String
   route           Route          @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  driverId        String?
+  driver          Driver?        @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  vehicleId       String?
+  vehicle         Vehicle?       @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
   tripType        String         // MORNING_PICKUP, AFTERNOON_DROP
-  date            DateTime
-  status          String         @default("COMPLETED") // IN_PROGRESS, COMPLETED, DELAYED
+  date            DateTime       @default(now())
+  status          String         @default("IN_PROGRESS") // IN_PROGRESS, COMPLETED, DELAYED
+  startedAt       DateTime?      @default(now())
+  endedAt         DateTime?
+  currentLatitude Float?
+  currentLongitude Float?
+  currentSpeed    Float?
+  currentHeading  Float?
+  lastGpsUpdate   DateTime?
+  currentStopId   String?
+  notes           String?
+  studentStatuses TripStudentStatus[]
+  stopLogs        TripStopLog[]
+  incidents       TransportIncident[]
+}
+
+model TripStudentStatus {
+  id              String         @id @default(uuid())
+  tripId          String
+  trip            TripLog        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  studentId       String
+  student         Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  stopId          String
+  stop            RouteStop      @relation(fields: [stopId], references: [id], onDelete: Cascade)
+  status          String         @default("WAITING") // WAITING, BOARDED, DROPPED, ABSENT, SKIPPED
+  markedAt        DateTime?      @default(now())
+  remarks         String?
+
+  @@unique([tripId, studentId])
+}
+
+model TripStopLog {
+  id              String         @id @default(uuid())
+  tripId          String
+  trip            TripLog        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  stopId          String
+  stop            RouteStop      @relation(fields: [stopId], references: [id], onDelete: Cascade)
+  status          String         @default("PENDING") // PENDING, REACHED, SKIPPED
+  reachedAt       DateTime?
+
+  @@unique([tripId, stopId])
+}
+
+model TransportIncident {
+  id              String         @id @default(uuid())
+  schoolId        String
+  routeId         String?
+  vehicleId       String?
+  driverId        String
+  driver          Driver         @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  tripId          String?
+  trip            TripLog?       @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  incidentType    String         // BREAKDOWN, ACCIDENT, MEDICAL_EMERGENCY, DELAY, OTHER
+  severity        String         @default("MEDIUM") // LOW, MEDIUM, HIGH, CRITICAL
+  description     String
+  location        String?
+  latitude        Float?
+  longitude       Float?
+  reportedAt      DateTime       @default(now())
+  status          String         @default("REPORTED") // REPORTED, ACKNOWLEDGED, RESOLVED
+}
+
+model VehicleInspectionLog {
+  id              String         @id @default(uuid())
+  schoolId        String
+  vehicleId       String
+  vehicle         Vehicle        @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  driverId        String
+  driver          Driver         @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  inspectionDate  DateTime       @default(now())
+  odometerReading Float?
+  fuelLiters      Float?
+  fuelCost        Float?
+  engineOilCheck  Boolean        @default(true)
+  tirePressureCheck Boolean      @default(true)
+  brakesCheck     Boolean        @default(true)
+  lightsCheck     Boolean        @default(true)
+  emergencyDoorCheck Boolean     @default(true)
+  firstAidKitCheck Boolean       @default(true)
+  cleanlinessCheck Boolean       @default(true)
   notes           String?
 }
 

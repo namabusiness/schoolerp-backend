@@ -11,10 +11,14 @@ import {
 } from '@nestjs/common';
 import { AcademicsService } from './academics.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { Tenant } from '../../common/decorators/tenant.decorator';
+import { Role } from '@prisma/client';
 
 @Controller('academics')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN, Role.TEACHER, Role.STUDENT, Role.PARENT)
 export class AcademicsController {
   constructor(private academicsService: AcademicsService) {}
 

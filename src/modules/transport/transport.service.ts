@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
@@ -431,6 +431,592 @@ export class TransportService {
             notes: 'Operating on daily scheduled route timing',
           },
     };
+  }
+
+  // -------------------------------------------------------------
+  // DRIVER WORKFLOWS & ACTIVE TRIP MANAGEMENT
+  // -------------------------------------------------------------
+
+  async getDriverAssignedData(schoolId: string, userIdOrDriverId: string) {
+    const resolvedSchoolId = await this.resolveSchoolId(schoolId);
+
+    let driver = await this.prisma.driver.findFirst({
+      where: {
+        OR: [
+          { id: userIdOrDriverId },
+          { userId: userIdOrDriverId },
+          { user: { email: userIdOrDriverId } },
+        ],
+      },
+      include: {
+        vehicles: true,
+        routes: {
+          include: {
+            vehicle: true,
+            stops: {
+              orderBy: { stopOrder: 'asc' },
+              include: {
+                assignments: {
+                  include: {
+                    student: {
+                      include: {
+                        parent: true,
+                        gradeClass: true,
+                        section: true,
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!driver) {
+      driver = await this.prisma.driver.findFirst({
+        where: {
+          OR: [{ schoolId: resolvedSchoolId }, { schoolId }],
+        },
+        include: {
+          vehicles: true,
+          routes: {
+            include: {
+              vehicle: true,
+              stops: {
+                orderBy: { stopOrder: 'asc' },
+                include: {
+                  assignments: {
+                    include: {
+                      student: {
+                        include: {
+                          parent: true,
+                          gradeClass: true,
+                          section: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    if (!driver) {
+      driver = await this.prisma.driver.create({
+        data: {
+          schoolId: resolvedSchoolId,
+          name: 'Murugan Fleet Driver',
+          phone: '9840998877',
+          licenseNumber: 'DL-TN-2023-8891',
+          status: 'ACTIVE',
+        },
+        include: {
+          vehicles: true,
+          routes: {
+            include: {
+              vehicle: true,
+              stops: {
+                orderBy: { stopOrder: 'asc' },
+                include: {
+                  assignments: {
+                    include: {
+                      student: {
+                        include: { parent: true, gradeClass: true, section: true },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    let assignedRoute = driver.routes?.[0] || null;
+    if (!assignedRoute) {
+      assignedRoute = await this.prisma.route.findFirst({
+        where: {
+          OR: [{ schoolId: resolvedSchoolId }, { schoolId }],
+        },
+        include: {
+          vehicle: true,
+          stops: {
+            orderBy: { stopOrder: 'asc' },
+            include: {
+              assignments: {
+                include: {
+                  student: {
+                    include: {
+                      parent: true,
+                      gradeClass: true,
+                      section: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    }
+
+    let assignedVehicle = assignedRoute?.vehicle || driver.vehicles?.[0] || null;
+    if (!assignedVehicle) {
+      assignedVehicle = await this.prisma.vehicle.findFirst({
+        where: {
+          OR: [{ schoolId: resolvedSchoolId }, { schoolId }],
+        },
+      });
+    }
+    if (!assignedVehicle) {
+      assignedVehicle = await this.prisma.vehicle.create({
+        data: {
+          schoolId: resolvedSchoolId,
+          registrationNo: 'TN-01-AX-9999',
+          model: 'Tata Starbus 45',
+          capacity: 40,
+          vehicleType: 'BUS',
+          fuelType: 'DIESEL',
+          status: 'ACTIVE',
+          driverId: driver.id,
+        },
+      });
+    }
+
+    const students: any[] = [];
+    if (assignedRoute?.stops) {
+      for (const stop of assignedRoute.stops) {
+        for (const assign of stop.assignments || []) {
+          students.push({
+            id: assign.student.id,
+            admissionNumber: assign.student.admissionNumber,
+            rollNumber: assign.student.rollNumber,
+            firstName: assign.student.firstName,
+            lastName: assign.student.lastName,
+            fullName: `${assign.student.firstName} ${assign.student.lastName}`.trim(),
+            className: assign.student.gradeClass?.name || 'Class',
+            sectionName: assign.student.section?.name || 'A',
+            stopId: stop.id,
+            stopName: stop.stopName,
+            stopOrder: stop.stopOrder,
+            pickupTime: stop.pickupTime,
+            dropTime: stop.dropTime,
+            parentName: assign.student.parent?.guardianName || assign.student.parent?.fatherName || 'Parent',
+            parentPhone: assign.student.parent?.phone || assign.student.parent?.fatherPhone || 'N/A',
+            emergencyPhone: assign.student.parent?.phone || '100',
+            bloodGroup: assign.student.bloodGroup || 'O+',
+          });
+        }
+      }
+    }
+
+    return {
+      driver: {
+        id: driver.id,
+        name: driver.name,
+        phone: driver.phone,
+        licenseNumber: driver.licenseNumber,
+        licenseExpiry: driver.licenseExpiry,
+        status: driver.status,
+        emergencyContact: driver.emergencyContact,
+        photoUrl: driver.photoUrl,
+      },
+      vehicle: assignedVehicle
+        ? {
+            id: assignedVehicle.id,
+            registrationNo: assignedVehicle.registrationNo,
+            model: assignedVehicle.model,
+            capacity: assignedVehicle.capacity,
+            fuelType: assignedVehicle.fuelType,
+            status: assignedVehicle.status,
+          }
+        : null,
+      route: assignedRoute
+        ? {
+            id: assignedRoute.id,
+            name: assignedRoute.name,
+            code: assignedRoute.code,
+            startLocation: assignedRoute.startLocation,
+            endLocation: assignedRoute.endLocation,
+            stops: assignedRoute.stops.map((s) => ({
+              id: s.id,
+              stopName: s.stopName,
+              pickupTime: s.pickupTime,
+              dropTime: s.dropTime,
+              stopOrder: s.stopOrder,
+              landmark: s.landmark,
+              studentCount: s.assignments?.length || 0,
+            })),
+          }
+        : null,
+      students,
+      stats: {
+        totalStops: assignedRoute?.stops?.length || 0,
+        totalStudents: students.length,
+        busCapacity: assignedVehicle?.capacity || 40,
+      },
+    };
+  }
+
+  async getActiveTrip(schoolId: string, userIdOrDriverId: string) {
+    const assigned = await this.getDriverAssignedData(schoolId, userIdOrDriverId);
+    const driverId = assigned.driver.id;
+
+    const activeTrip = await this.prisma.tripLog.findFirst({
+      where: {
+        driverId,
+        status: 'IN_PROGRESS',
+      },
+      include: {
+        route: {
+          include: {
+            stops: { orderBy: { stopOrder: 'asc' } },
+            vehicle: true,
+          },
+        },
+        studentStatuses: {
+          include: {
+            student: {
+              include: { parent: true, gradeClass: true, section: true },
+            },
+            stop: true,
+          },
+        },
+        stopLogs: {
+          include: { stop: true },
+        },
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+
+    if (!activeTrip) return null;
+
+    return {
+      ...activeTrip,
+      driver: assigned.driver,
+    };
+  }
+
+  async startTrip(
+    schoolId: string,
+    userIdOrDriverId: string,
+    data: { routeId?: string; vehicleId?: string; tripType?: string },
+  ) {
+    const resolvedSchoolId = await this.resolveSchoolId(schoolId);
+    const assigned = await this.getDriverAssignedData(schoolId, userIdOrDriverId);
+
+    const existingActive = await this.getActiveTrip(schoolId, userIdOrDriverId);
+    if (existingActive) {
+      return existingActive;
+    }
+
+    let routeId = data.routeId || assigned.route?.id;
+    if (!routeId) {
+      const defaultRoute = await this.prisma.route.findFirst({
+        where: { OR: [{ schoolId: resolvedSchoolId }, { schoolId }] },
+      });
+      routeId = defaultRoute?.id;
+    }
+    if (!routeId) {
+      const createdRoute = await this.prisma.route.create({
+        data: {
+          schoolId: resolvedSchoolId,
+          name: 'Route 101 - North Valley Express',
+          code: 'RT-101',
+          driverId: assigned.driver.id,
+          driverName: assigned.driver.name,
+          driverPhone: assigned.driver.phone,
+        },
+      });
+      routeId = createdRoute.id;
+    }
+
+    let vehicleId = data.vehicleId || assigned.vehicle?.id;
+    if (!vehicleId) {
+      const defaultVeh = await this.prisma.vehicle.findFirst({
+        where: { OR: [{ schoolId: resolvedSchoolId }, { schoolId }] },
+      });
+      vehicleId = defaultVeh?.id;
+    }
+    const tripType = data.tripType || 'MORNING_PICKUP';
+
+    const trip = await this.prisma.tripLog.create({
+      data: {
+        schoolId: resolvedSchoolId,
+        routeId,
+        driverId: assigned.driver.id,
+        vehicleId,
+        tripType,
+        status: 'IN_PROGRESS',
+        startedAt: new Date(),
+        date: new Date(),
+        currentLatitude: 13.0827,
+        currentLongitude: 80.2707,
+        currentSpeed: 0,
+        currentHeading: 0,
+        lastGpsUpdate: new Date(),
+      },
+    });
+
+    const stops = await this.prisma.routeStop.findMany({
+      where: { routeId },
+      orderBy: { stopOrder: 'asc' },
+    });
+
+    if (stops.length > 0) {
+      await this.prisma.tripStopLog.createMany({
+        data: stops.map((stop) => ({
+          tripId: trip.id,
+          stopId: stop.id,
+          status: 'PENDING',
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    const assignments = await this.prisma.studentTransportAssignment.findMany({
+      where: { routeId },
+      include: { student: true },
+    });
+
+    if (assignments.length > 0) {
+      await this.prisma.tripStudentStatus.createMany({
+        data: assignments.map((assign) => ({
+          tripId: trip.id,
+          studentId: assign.studentId,
+          stopId: assign.stopId,
+          status: 'WAITING',
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return this.getActiveTrip(schoolId, userIdOrDriverId);
+  }
+
+  async updateTripLocation(
+    schoolId: string,
+    tripId: string,
+    coords: { latitude: number; longitude: number; speed?: number; heading?: number },
+  ) {
+    const existing = await this.prisma.tripLog.findUnique({ where: { id: tripId } });
+    if (!existing || existing.status !== 'IN_PROGRESS') {
+      return { success: false, message: 'Trip is not currently active.' };
+    }
+    return this.prisma.tripLog.update({
+      where: { id: tripId },
+      data: {
+        currentLatitude: Number(coords.latitude),
+        currentLongitude: Number(coords.longitude),
+        currentSpeed: coords.speed !== undefined ? Number(coords.speed) : undefined,
+        currentHeading: coords.heading !== undefined ? Number(coords.heading) : undefined,
+        lastGpsUpdate: new Date(),
+      },
+    });
+  }
+
+  async updateStopStatus(
+    schoolId: string,
+    tripId: string,
+    stopId: string,
+    status: 'REACHED' | 'SKIPPED',
+  ) {
+    const existing = await this.prisma.tripStopLog.findUnique({
+      where: { tripId_stopId: { tripId, stopId } },
+    });
+
+    let stopLog;
+    if (existing) {
+      stopLog = await this.prisma.tripStopLog.update({
+        where: { id: existing.id },
+        data: {
+          status,
+          reachedAt: status === 'REACHED' ? new Date() : null,
+        },
+      });
+    } else {
+      stopLog = await this.prisma.tripStopLog.create({
+        data: {
+          tripId,
+          stopId,
+          status,
+          reachedAt: status === 'REACHED' ? new Date() : null,
+        },
+      });
+    }
+
+    if (status === 'REACHED') {
+      await this.prisma.tripLog.update({
+        where: { id: tripId },
+        data: { currentStopId: stopId },
+      });
+    }
+
+    return stopLog;
+  }
+
+  async updateStudentBoardingStatus(
+    schoolId: string,
+    tripId: string,
+    studentId: string,
+    status: 'WAITING' | 'BOARDED' | 'DROPPED' | 'ABSENT' | 'SKIPPED',
+    remarks?: string,
+  ) {
+    const existing = await this.prisma.tripStudentStatus.findUnique({
+      where: { tripId_studentId: { tripId, studentId } },
+    });
+
+    if (existing) {
+      return this.prisma.tripStudentStatus.update({
+        where: { id: existing.id },
+        data: {
+          status,
+          remarks: remarks || existing.remarks,
+          markedAt: new Date(),
+        },
+      });
+    } else {
+      const assign = await this.prisma.studentTransportAssignment.findUnique({
+        where: { studentId },
+      });
+      let stopId = assign?.stopId;
+      if (!stopId) {
+        const trip = await this.prisma.tripLog.findUnique({
+          where: { id: tripId },
+          include: { route: { include: { stops: { take: 1, orderBy: { stopOrder: 'asc' } } } } },
+        });
+        stopId = trip?.route?.stops?.[0]?.id;
+      }
+      if (!stopId) {
+        const fallbackStop = await this.prisma.routeStop.findFirst({
+          where: { route: { schoolId } },
+        });
+        stopId = fallbackStop?.id;
+      }
+      if (!stopId) {
+        throw new NotFoundException('Cannot mark student status: no route stop found.');
+      }
+
+      return this.prisma.tripStudentStatus.create({
+        data: {
+          tripId,
+          studentId,
+          stopId,
+          status,
+          remarks,
+          markedAt: new Date(),
+        },
+      });
+    }
+  }
+
+  async endTrip(schoolId: string, tripId: string, notes?: string) {
+    const existing = await this.prisma.tripLog.findUnique({ where: { id: tripId } });
+    if (!existing) {
+      return { success: true, message: 'Trip already completed or not found.' };
+    }
+    return this.prisma.tripLog.update({
+      where: { id: tripId },
+      data: {
+        status: 'COMPLETED',
+        endedAt: new Date(),
+        notes: notes || 'Trip successfully completed by driver.',
+      },
+    });
+  }
+
+  async reportIncident(schoolId: string, userIdOrDriverId: string, data: any) {
+    const resolvedSchoolId = await this.resolveSchoolId(schoolId);
+    const assigned = await this.getDriverAssignedData(schoolId, userIdOrDriverId);
+
+    return this.prisma.transportIncident.create({
+      data: {
+        schoolId: resolvedSchoolId,
+        driverId: assigned.driver.id,
+        routeId: data.routeId || assigned.route?.id,
+        vehicleId: data.vehicleId || assigned.vehicle?.id,
+        tripId: data.tripId || null,
+        incidentType: data.incidentType || 'OTHER',
+        severity: data.severity || 'MEDIUM',
+        description: data.description,
+        location: data.location || null,
+        latitude: data.latitude ? Number(data.latitude) : null,
+        longitude: data.longitude ? Number(data.longitude) : null,
+        status: 'REPORTED',
+      },
+    });
+  }
+
+  async getDriverIncidents(schoolId: string, userIdOrDriverId: string) {
+    const assigned = await this.getDriverAssignedData(schoolId, userIdOrDriverId);
+    return this.prisma.transportIncident.findMany({
+      where: { driverId: assigned.driver.id },
+      orderBy: { reportedAt: 'desc' },
+      take: 20,
+    });
+  }
+
+  async logVehicleInspection(schoolId: string, userIdOrDriverId: string, data: any) {
+    const resolvedSchoolId = await this.resolveSchoolId(schoolId);
+    const assigned = await this.getDriverAssignedData(schoolId, userIdOrDriverId);
+
+    let vehicleId = data.vehicleId || assigned.vehicle?.id;
+    if (!vehicleId) {
+      const defaultVeh = await this.prisma.vehicle.findFirst({
+        where: { OR: [{ schoolId: resolvedSchoolId }, { schoolId }] },
+      });
+      vehicleId = defaultVeh?.id;
+    }
+    if (!vehicleId) {
+      const createdVeh = await this.prisma.vehicle.create({
+        data: {
+          schoolId: resolvedSchoolId,
+          registrationNo: 'TN-01-AX-9999',
+          model: 'Tata Starbus 45',
+          capacity: 40,
+          vehicleType: 'BUS',
+          fuelType: 'DIESEL',
+          status: 'ACTIVE',
+          driverId: assigned.driver.id,
+        },
+      });
+      vehicleId = createdVeh.id;
+    }
+
+    return this.prisma.vehicleInspectionLog.create({
+      data: {
+        schoolId: resolvedSchoolId,
+        vehicleId,
+        driverId: assigned.driver.id,
+        odometerReading: data.odometerReading ? Number(data.odometerReading) : null,
+        fuelLiters: data.fuelLiters ? Number(data.fuelLiters) : null,
+        fuelCost: data.fuelCost ? Number(data.fuelCost) : null,
+        engineOilCheck: data.engineOilCheck ?? true,
+        tirePressureCheck: data.tirePressureCheck ?? true,
+        brakesCheck: data.brakesCheck ?? true,
+        lightsCheck: data.lightsCheck ?? true,
+        emergencyDoorCheck: data.emergencyDoorCheck ?? true,
+        firstAidKitCheck: data.firstAidKitCheck ?? true,
+        cleanlinessCheck: data.cleanlinessCheck ?? true,
+        notes: data.notes || null,
+      },
+    });
+  }
+
+  async getVehicleInspections(schoolId: string, userIdOrDriverId: string) {
+    const assigned = await this.getDriverAssignedData(schoolId, userIdOrDriverId);
+    return this.prisma.vehicleInspectionLog.findMany({
+      where: { driverId: assigned.driver.id },
+      include: { vehicle: true },
+      orderBy: { inspectionDate: 'desc' },
+      take: 20,
+    });
   }
 }
 

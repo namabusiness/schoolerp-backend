@@ -1,11 +1,14 @@
 import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { StaffHrService } from './staff-hr.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { Tenant } from '../../common/decorators/tenant.decorator';
-import { LeaveStatus } from '@prisma/client';
+import { LeaveStatus, Role } from '@prisma/client';
 
 @Controller('hr')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(Role.PRINCIPAL, Role.SCHOOL_ADMIN, Role.SUPER_ADMIN)
 export class StaffHrController {
   constructor(private hrService: StaffHrService) {}
 
